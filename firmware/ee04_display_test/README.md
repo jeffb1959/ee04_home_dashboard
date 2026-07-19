@@ -1,83 +1,67 @@
-# Phase 1.4A.1 - Conversion image pour Spectra 6
+# Phase 1.4A.2 - Intégration image binaire en firmware (PROGMEM)
 
-Ce dossier contient un outil de conversion hors firmware, utilisé sur PC pour comparer
-plusieurs variantes de conversion de `assets/dashboard.png` vers la palette 6 couleurs
-du Spectra 6 (`800 x 480`).
+Ce projet intègre temporairement l'image de test `dashboard_hybrid40_bwui.bin` dans le
+firmware ESP32 pour une validation visuelle réelle sur l'écran Spectra 6.
 
-## Script
+## Script ajouté : `tools/bin_to_header.py`
 
-- Fichier : `tools/convert_spectra6.py`
-- Type : Python + Pillow uniquement
-- Palette utilisée :
-  - 0 : noir `(0, 0, 0)`
-  - 1 : blanc `(255, 255, 255)`
-  - 2 : rouge `(255, 0, 0)`
-  - 3 : jaune `(255, 255, 0)`
-  - 4 : vert `(0, 255, 0)`
-  - 5 : bleu `(0, 0, 255)`
+- Rôle : convertir un fichier binaire d'indices (`0..5`) en header C++ `PROGMEM`.
+- Fichier source par défaut : `generated/dashboard_hybrid40_bwui.bin`
+- Vérifications :
+  - existence du fichier source
+  - taille exacte `384000` octets (`800 x 480`)
+  - indices compris entre `0` et `5`
+- Sortie : `include/dashboard_image.h`
+- Vérifie/affiche en fin de génération :
+  - fichier source
+  - taille source
+  - fichier généré
+  - nombre d'octets
+  - validation réussie
 
-## Commande
+Commande :
+- `python tools/bin_to_header.py`
 
-- Commande simple :
-  - `python tools/convert_spectra6.py`
-- Option :
-  - `python tools/convert_spectra6.py --input assets/dashboard.png`
+## Fichier généré
 
-## Fichiers produits
+- `include/dashboard_image.h`
+- Contenu attendu :
+  - `#pragma once`
+  - `#include <Arduino.h>`
+  - `DASHBOARD_IMAGE_WIDTH`
+  - `DASHBOARD_IMAGE_HEIGHT`
+  - `DASHBOARD_IMAGE_SIZE`
+  - `const uint8_t DASHBOARD_IMAGE_DATA[] PROGMEM`
 
-- `generated/dashboard_direct.png`
-- `generated/dashboard_direct.bin`
-- `generated/dashboard_fs80.png`
-- `generated/dashboard_fs80.bin`
-- `generated/dashboard_fs60.png`
-- `generated/dashboard_fs60.bin`
-- `generated/dashboard_fs40.png`
-- `generated/dashboard_fs40.bin`
-- `generated/dashboard_bayer4.png`
-- `generated/dashboard_bayer4.bin`
-- `generated/dashboard_bayer8.png`
-- `generated/dashboard_bayer8.bin`
-- `generated/dashboard_hybrid.png`
-- `generated/dashboard_hybrid.bin`
+L’image est intégrée temporairement dans le firmware sous forme de tableau PROGMEM.
 
-Le dossier `generated/` est créé automatiquement.
+## Firmware (`src/main.cpp`)
 
-Les fichiers `.bin` contiennent **un octet par pixel** avec **un index palette de 0 à 5**,
-dans l’ordre ligne par ligne (de gauche à droite puis de haut en bas).
-La taille attendue est `384000` octets (`800 x 480`).
+- Affiche un en-tête série :
+  - `Phase 1.4A.2`
+  - `Affichage image Spectra 6 intégrée`
+- Initialise l'écran, vérifie les dimensions déclarées, puis affiche l'image à partir de
+  `DASHBOARD_IMAGE_DATA` via `drawPixel()`.
+- Mise à jour écran effectuée une seule fois avec `epaper.update()`.
+- Affiche :
+  - durée d'initialisation
+  - durée de dessin
+  - durée de refresh
+  - durée totale
+  - nombre d'indices invalides détectés
+- Log de progression toutes les 50 lignes.
+- Après affichage, ne relance plus de refresh.
+- `loop()` affiche toutes les 30 secondes :
+  - `EE04 actif - image de test affichée.`
 
-## Variantes produites
+## Procédure Build / Upload / Monitor
 
-- `dashboard_direct`
-  - Conversion directe.
-  - Chaque pixel est converti vers la couleur de la palette la plus proche
-    (distance euclidienne RGB).
-- `dashboard_fs80`
-  - Floyd-Steinberg avec facteur de diffusion `0.8`.
-- `dashboard_fs60`
-  - Floyd-Steinberg avec facteur de diffusion `0.6`.
-- `dashboard_fs40`
-  - Floyd-Steinberg avec facteur de diffusion `0.4`.
-- `dashboard_bayer4`
-  - Ordered dithering Bayer 4x4 avant quantification palette.
-- `dashboard_bayer8`
-  - Ordered dithering Bayer 8x8 avant quantification palette.
-- `dashboard_hybrid`
-  - Zone A : `y = 360..479` -> conversion directe sans dithering.
-  - Zone B : `x = 500..779` et `y = 40..319` -> conversion directe sans dithering.
-  - Zone C (reste) : Floyd-Steinberg à `60 %`.
+- Build : `platformio run`
+- Upload : `platformio run --target upload`
+- Monitor : `platformio device monitor`
 
-## Validation effectuée par le script
+## Limites de cette méthode
 
-- Vérification du fichier source :
-  - existant
-  - lisible
-  - dimensions exactes `800 x 480` (sinon arrêt)
-- Vérification de chaque image de sortie :
-  - taille `800 x 480`
-  - mode `RGB`
-  - uniquement les 6 couleurs autorisées
-- Vérification des `.bin` :
-  - 1 octet par pixel
-  - index entre 0 et 5
-  - taille exacte `384000` octets
+- La méthode binaire->header augmente fortement la taille compilée du firmware (données en flash).
+- Toute modification d'image nécessite de relancer `bin_to_header.py` et de recompiler.
+- Méthode destinée à la validation visuelle rapide, pas une solution de production finale.
