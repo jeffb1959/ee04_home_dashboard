@@ -1,11 +1,38 @@
 # EE04 Home Dashboard
 
-## Phase 1.0
+## Phase 1.1
 
-Cette phase fournit un serveur Flask minimal qui génère dynamiquement avec
-Pillow une image PNG de 800 × 480 pixels. Elle permet de valider la base du
-serveur et le format de l'image avant l'ajout des sources de données et de
-l'écran ePaper EE04.
+Cette phase introduit le premier moteur de composition visuelle du projet. Le
+serveur Flask génère avec Pillow une maquette réaliste de 800 × 480 pixels à
+partir d'un arrière-plan illustré. Les blocs météo, activité MGM et diagnostic
+utilisent encore des données fictives afin de valider la mise en page.
+
+La logique visuelle se trouve dans `dashboard_renderer.py`; `app.py` conserve
+les routes HTTP et délègue la création de l'image au renderer.
+
+## Arrière-plan
+
+Le fichier utilisé par défaut doit se trouver ici :
+
+```text
+assets/backgrounds/lundi_beau.png
+```
+
+L'arrière-plan est adapté en haute qualité à une zone supérieure de
+800 × 360 pixels, en conservant son ratio et avec un léger recadrage si
+nécessaire. La météo reste dans cette partie illustrée.
+
+Les 120 pixels inférieurs forment une bande crème opaque et indépendante de
+l'illustration. Elle contient les quatre lignes de l'activité MGM fictive,
+puis une dernière ligne plus discrète réservée au diagnostic.
+
+Si le fichier est absent ou illisible, le serveur génère automatiquement une
+image de secours claire portant le message `ARRIÈRE-PLAN INTROUVABLE`. La route
+`/dashboard.png` reste donc disponible.
+
+Le rendu privilégie les polices système de Raspberry Pi OS. Une copie locale
+de DejaVu Sans, accompagnée de sa licence dans `assets/fonts/`, garantit le
+rendu des accents français si ces polices système sont absentes.
 
 ## Installation
 
@@ -44,6 +71,7 @@ source .venv/bin/activate
 pytest
 ```
 
-La phase 1.0 n'intègre pas encore les sources de données externes, Home
-Assistant, la météo, MGM, Outlook, Chronogolf, ni la communication avec
-l'écran EE04. Aucun service systemd n'est installé à cette étape.
+La phase 1.1 n'intègre pas encore Home Assistant, les données météo réelles,
+MGM réel, Outlook, Chronogolf, ni la communication avec l'écran EE04. Les
+valeurs affichées sont des données de démonstration. Aucun service systemd
+n'est installé à cette étape.
