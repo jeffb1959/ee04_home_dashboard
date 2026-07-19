@@ -1,0 +1,17 @@
+.venv/
+venv/
+
+__pycache__/
+*.py[cod]
+
+.env
+secrets.json
+config.local.json
+
+data/*.json
+output/
+generated/
+
+.vscode/
+.DS_Store
+Thumbs.db
