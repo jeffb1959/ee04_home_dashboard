@@ -6,3 +6,5 @@
 .vscode/launch.json
 .vscode/ipch
 compile_commands.json
+generated/dashboard_direct.bin
+generated/dashboard_dithered.bin
