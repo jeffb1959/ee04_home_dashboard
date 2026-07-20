@@ -1,0 +1,4 @@
+#pragma once
+
+#define BOARD_SCREEN_COMBO 509
+#define USE_XIAO_EPAPER_DISPLAY_BOARD_EE04
