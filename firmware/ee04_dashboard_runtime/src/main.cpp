@@ -6,22 +6,26 @@
 #include <WiFiClient.h>
 #include <esp_system.h>
 
+#include "driver.h"
 #include "wifi_secrets.h"
+#include "TFT_eSPI.h"
 
 // =====================================================================
-// Phase 1.5B.1 : téléchargement + validation binaire dashboard
+// Phase 1.5B.2 : telechargement + validation + affichage ePaper
 // =====================================================================
 
 static const char* kProjectName = "ee04_home_dashboard";
-static const char* kProjectPhase = "1.5B.1";
+static const char* kProjectPhase = "1.5B.2";
 static const char* kDashboardUrl = DASHBOARD_URL;
 static const char* kDashboardPath = "/dashboard.bin";
 static const char* kTempDashboardPath = "/dashboard.tmp";
 static const char* kBackupDashboardPath = "/dashboard.bin.bak";
-static const char* kUserAgent = "EE04-Home-Dashboard-Phase1.5B.1/1.0";
+static const char* kUserAgent = "EE04-Home-Dashboard-Phase1.5B.2/1.0";
 static const char* kExpectedMime = "application/octet-stream";
 
-static const size_t kExpectedDashboardSize = 384000;  // 800 x 480 x 1 octet
+static const uint16_t kDashboardWidth = 800;
+static const uint16_t kDashboardHeight = 480;
+static const size_t kExpectedDashboardSize = static_cast<size_t>(kDashboardWidth) * kDashboardHeight; // 1 octet par pixel
 static const uint8_t kMaxPixelValue = 5;
 
 static const unsigned long kWifiTimeoutMs = 20000;
@@ -29,6 +33,7 @@ static const unsigned long kHttpTimeoutMs = 15000;
 static const unsigned long kFirstDownloadDelayMs = 5000;
 static const unsigned long kDownloadIntervalMs = 5UL * 60UL * 1000UL;
 static const unsigned long kStatusIntervalMs = 10UL * 1000UL;
+static const size_t kReadChunkSize = 1024;
 
 struct DownloadResult {
   bool success = false;
@@ -44,10 +49,29 @@ struct DownloadResult {
   bool mimeDifferent = false;
 };
 
+struct DisplayResult {
+  bool success = false;
+  size_t invalidBytes = 0;
+  size_t bytesRead = 0;
+  unsigned long drawDurationMs = 0;
+  unsigned long refreshDurationMs = 0;
+  unsigned long totalDurationMs = 0;
+  String failedStep;
+  String failedReason;
+};
+
 unsigned long g_nextDownloadAtMs = 0;
 unsigned long g_lastStatusReportMs = 0;
 unsigned long g_lastReconnectAttemptMs = 0;
 uint32_t g_cycleCount = 0;
+
+bool g_littleFsMounted = false;
+bool g_epaperInitialized = false;
+bool g_displayInProgress = false;
+bool g_lastScreenUpdateSuccess = false;
+unsigned long g_lastScreenUpdateMs = 0;
+
+EPaper epaper;
 
 String resetReasonToString(esp_reset_reason_t reason) {
   switch (reason) {
@@ -79,7 +103,7 @@ void printBootInfo() {
   Serial.printf("Phase : %s\n", kProjectPhase);
   Serial.printf("Raison reboot : %s\n", resetReasonToString(esp_reset_reason()).c_str());
   Serial.printf("Adresse MAC : %s\n", WiFi.macAddress().c_str());
-  Serial.printf("LittleFS monte : %s\n", "oui");
+  Serial.printf("LittleFS monte : %s\n", g_littleFsMounted ? "oui" : "non");
   printLittleFsInfo();
 }
 
@@ -87,6 +111,7 @@ bool mountLittleFS() {
   Serial.println("Montage LittleFS (sans formatage de secours)...");
   if (LittleFS.begin(false)) {
     Serial.println("LittleFS monte avec succes.");
+    g_littleFsMounted = true;
     return true;
   }
 
@@ -98,11 +123,12 @@ bool mountLittleFS() {
 
   Serial.println("Formatage execute, tentative de remontage...");
   if (!LittleFS.begin(false)) {
-    Serial.println("Remontage LittleFS après formatage impossible.");
+    Serial.println("Remontage LittleFS apres formatage impossible.");
     return false;
   }
 
-  Serial.println("LittleFS monte après formatage.");
+  Serial.println("LittleFS monte apres formatage.");
+  g_littleFsMounted = true;
   return true;
 }
 
@@ -142,6 +168,10 @@ bool connectWifi(uint32_t timeoutMs) {
 }
 
 void printPeriodicStatus(unsigned long now) {
+  if (g_displayInProgress) {
+    return;
+  }
+
   Serial.println("===== RAPPORT PERIODIQUE (10s) =====");
   Serial.printf("Uptime : %lus\n", now / 1000UL);
   Serial.printf("Wi-Fi connecte : %s\n", WiFi.status() == WL_CONNECTED ? "oui" : "non");
@@ -165,6 +195,149 @@ void printPeriodicStatus(unsigned long now) {
   }
   Serial.printf("dashboard.bin present : %s\n", hasBin ? "oui" : "non");
   Serial.printf("taille dashboard.bin : %u octets\n", fileSize);
+
+  Serial.printf("Ecran initialise : %s\n", g_epaperInitialized ? "oui" : "non");
+  Serial.printf("Derniere mise a jour ecran reussie : %s\n", g_lastScreenUpdateSuccess ? "oui" : "non");
+  if (g_lastScreenUpdateSuccess) {
+    const unsigned long delta = (now >= g_lastScreenUpdateMs) ? (now - g_lastScreenUpdateMs) : 0;
+    Serial.printf("Temps depuis derniere mise a jour ecran : %lu s\n", delta / 1000UL);
+  } else {
+    Serial.println("Temps depuis derniere mise a jour ecran : jamais");
+  }
+}
+
+uint16_t colorFromPixelIndex(uint8_t index) {
+  switch (index) {
+    case 0: return TFT_BLACK;
+    case 1: return TFT_WHITE;
+    case 2: return TFT_RED;
+    case 3: return TFT_YELLOW;
+    case 4: return TFT_GREEN;
+    case 5: return TFT_BLUE;
+    default: return TFT_WHITE;
+  }
+}
+
+bool initEpaperIfNeeded() {
+  if (g_epaperInitialized) {
+    return true;
+  }
+
+  epaper.begin();
+  g_epaperInitialized = true;
+  return true;
+}
+
+DisplayResult afficherDashboardDepuisLittleFS() {
+  DisplayResult result;
+  result.failedStep = "verification LittleFS";
+
+  if (!g_littleFsMounted) {
+    result.failedReason = "LittleFS n'est pas monte";
+    return result;
+  }
+
+  result.failedStep = "controle dashboard.bin";
+  if (!LittleFS.exists(kDashboardPath)) {
+    result.failedReason = "dashboard.bin absent";
+    return result;
+  }
+
+  File dashboardFile = LittleFS.open(kDashboardPath, FILE_READ);
+  if (!dashboardFile) {
+    result.failedStep = "ouverture dashboard.bin";
+    result.failedReason = "Impossible d'ouvrir dashboard.bin en lecture";
+    return result;
+  }
+
+  if (dashboardFile.size() != kExpectedDashboardSize) {
+    result.failedStep = "taille dashboard.bin";
+    result.failedReason = "dashboard.bin taille invalide";
+    dashboardFile.close();
+    return result;
+  }
+
+  if (!initEpaperIfNeeded()) {
+    result.failedStep = "initialisation epaper";
+    result.failedReason = "Impossible d'initialiser l'ecran";
+    dashboardFile.close();
+    return result;
+  }
+
+  const unsigned long startAll = millis();
+  const unsigned long startDraw = millis();
+
+  epaper.fillSprite(TFT_WHITE);
+
+  uint8_t buffer[kReadChunkSize];
+  bool invalidFound = false;
+  bool readError = false;
+
+  for (uint16_t y = 0; y < kDashboardHeight; ++y) {
+    uint16_t x = 0;
+
+    while (x < kDashboardWidth) {
+      const size_t remainingInRow = static_cast<size_t>(kDashboardWidth - x);
+      const size_t toRead = min(remainingInRow, sizeof(buffer));
+      int readCount = dashboardFile.read(buffer, toRead);
+      if (readCount <= 0) {
+        result.failedStep = "lecture dashboard.bin";
+        result.failedReason = "Lecture interrompue avant fin du fichier";
+        readError = true;
+        break;
+      }
+
+      for (int i = 0; i < readCount; ++i) {
+        const uint8_t pixel = buffer[i];
+        if (pixel > kMaxPixelValue) {
+          ++result.invalidBytes;
+          invalidFound = true;
+        }
+        epaper.drawPixel(x + i, y, colorFromPixelIndex(pixel));
+      }
+
+      result.bytesRead += readCount;
+      x += readCount;
+
+      if (invalidFound) {
+        break;
+      }
+    }
+
+    if (invalidFound) {
+      result.failedReason = "Index pixel invalide detecte";
+      break;
+    }
+
+    if (readError) {
+      break;
+    }
+
+    if (((y + 1) % 50) == 0) {
+      Serial.printf("Ligne %u / %u\n", y + 1, kDashboardHeight);
+    }
+  }
+
+  dashboardFile.close();
+
+  result.drawDurationMs = millis() - startDraw;
+
+  if (result.invalidBytes > 0 || readError || result.bytesRead != kExpectedDashboardSize) {
+    if (result.failedReason.length() == 0) {
+      result.failedReason = "validation echec";
+    }
+    return result;
+  }
+
+  const unsigned long startRefresh = millis();
+  epaper.update();
+  result.refreshDurationMs = millis() - startRefresh;
+
+  result.totalDurationMs = millis() - startAll;
+  result.success = true;
+  g_lastScreenUpdateSuccess = true;
+  g_lastScreenUpdateMs = millis();
+  return result;
 }
 
 DownloadResult validateAndStoreDashboard() {
@@ -325,26 +498,28 @@ DownloadResult validateAndStoreDashboard() {
   return result;
 }
 
-void printSuccess(uint32_t cycle, const DownloadResult& r) {
-  Serial.println("===== RESULTAT TELECHARGEMENT =====");
+void printSuccess(uint32_t cycle, const DownloadResult& d, const DisplayResult& e) {
+  Serial.println("===== RESULTAT CYCLE =====");
+  const unsigned long totalCycleDuration = d.durationMs + e.totalDurationMs;
   Serial.printf("Cycle : %u\n", cycle);
-  Serial.printf("Code HTTP : %d\n", r.httpCode);
-  Serial.printf("Type MIME : %s\n", r.contentType.c_str());
-  Serial.printf("Octets recus : %u\n", r.bytesReceived);
-  printLittleFsInfo();
-  Serial.printf("Duree : %lu ms\n", r.durationMs);
-  Serial.printf("RSSI : %d dBm\n", r.rssi);
-  Serial.printf("Indices invalides : %u\n", r.invalidBytes);
+  Serial.printf("Fichier final recu : %u octets\n", d.bytesReceived);
+  Serial.printf("Code HTTP : %d\n", d.httpCode);
+  Serial.printf("Type MIME : %s\n", d.contentType.c_str());
+  Serial.printf("Duree telechargement : %lu ms\n", d.durationMs);
+  Serial.printf("Duree dessin : %lu ms\n", e.drawDurationMs);
+  Serial.printf("Duree refresh : %lu ms\n", e.refreshDurationMs);
+  Serial.printf("Duree totale affichage : %lu ms\n", e.totalDurationMs);
+  Serial.printf("Duree totale : %lu ms\n", totalCycleDuration);
+  Serial.printf("RSSI : %d dBm\n", d.rssi);
+  Serial.printf("Index invalides (affichage) : %u\n", e.invalidBytes);
   Serial.println("Resultat final : SUCCES");
-  if (r.mimeDifferent) {
-    Serial.println("Attention: MIME different de application/octet-stream.");
-  }
+  printLittleFsInfo();
 }
 
-void printFailure(uint32_t cycle, const DownloadResult& r) {
-  Serial.println("===== RESULTAT TELECHARGEMENT =====");
+void printDownloadFailure(uint32_t cycle, const DownloadResult& r) {
+  Serial.println("===== RESULTAT CYCLE =====");
   Serial.printf("Cycle : %u\n", cycle);
-  Serial.printf("Etape echecee : %s\n", r.failedStep.c_str());
+  Serial.printf("Etape echec : %s\n", r.failedStep.c_str());
   if (r.httpCode > 0) {
     Serial.printf("Code HTTP : %d\n", r.httpCode);
   }
@@ -353,6 +528,20 @@ void printFailure(uint32_t cycle, const DownloadResult& r) {
   }
   Serial.printf("Duree : %lu ms\n", r.durationMs);
   Serial.printf("Ancienne image conservee : %s\n", r.oldKept ? "OUI" : "NON");
+  Serial.println("Resultat final : ECHEC");
+}
+
+void printDisplayFailure(uint32_t cycle, const DisplayResult& r, size_t receivedBytes, int rssi) {
+  Serial.println("===== RESULTAT CYCLE =====");
+  Serial.printf("Cycle : %u\n", cycle);
+  Serial.printf("Etape echec affichage : %s\n", r.failedStep.c_str());
+  if (r.failedReason.length() > 0) {
+    Serial.printf("Erreur : %s\n", r.failedReason.c_str());
+  }
+  Serial.printf("Octets lus dashboard.bin : %u\n", receivedBytes);
+  Serial.printf("Index invalides (affichage) : %u\n", r.invalidBytes);
+  Serial.printf("RSSI : %d dBm\n", rssi);
+  Serial.printf("Ancienne image conservee : OUI\n");
   Serial.println("Resultat final : ECHEC");
 }
 
@@ -375,8 +564,16 @@ void setup() {
   }
 
   printBootInfo();
+
   g_nextDownloadAtMs = millis() + kFirstDownloadDelayMs;
   g_lastStatusReportMs = millis();
+
+  g_displayInProgress = true;
+  DisplayResult startupDisplay = afficherDashboardDepuisLittleFS();
+  if (!startupDisplay.success) {
+    Serial.printf("Affichage initial non effectue : %s\n", startupDisplay.failedReason.c_str());
+  }
+  g_displayInProgress = false;
 
   connectWifi(kWifiTimeoutMs);
 }
@@ -384,7 +581,7 @@ void setup() {
 void loop() {
   const unsigned long now = millis();
 
-  if ((long)(now - g_lastStatusReportMs) >= (long)kStatusIntervalMs) {
+  if (!g_displayInProgress && (long)(now - g_lastStatusReportMs) >= (long)kStatusIntervalMs) {
     printPeriodicStatus(now);
     g_lastStatusReportMs = now;
   }
@@ -394,18 +591,31 @@ void loop() {
     g_lastReconnectAttemptMs = now;
   }
 
-  if ((long)(now - g_nextDownloadAtMs) >= 0) {
+  if ((long)(now - g_nextDownloadAtMs) >= 0 && !g_displayInProgress) {
     g_cycleCount++;
     Serial.printf("\n=== Debut cycle %u ===\n", g_cycleCount);
+    g_displayInProgress = true;
 
-    DownloadResult result = validateAndStoreDashboard();
-    if (result.success) {
-      printSuccess(g_cycleCount, result);
-    } else {
-      printFailure(g_cycleCount, result);
+    DownloadResult downloadResult = validateAndStoreDashboard();
+    if (!downloadResult.success) {
+      printDownloadFailure(g_cycleCount, downloadResult);
+      g_displayInProgress = false;
+      g_nextDownloadAtMs = millis() + kDownloadIntervalMs;
+      return;
     }
 
-    g_nextDownloadAtMs = now + kDownloadIntervalMs;
+    DisplayResult displayResult = afficherDashboardDepuisLittleFS();
+    if (!displayResult.success) {
+      printDisplayFailure(g_cycleCount, displayResult, downloadResult.bytesReceived, downloadResult.rssi);
+      g_displayInProgress = false;
+      g_nextDownloadAtMs = millis() + kDownloadIntervalMs;
+      return;
+    }
+
+    printSuccess(g_cycleCount, downloadResult, displayResult);
+
+    g_displayInProgress = false;
+    g_nextDownloadAtMs = millis() + kDownloadIntervalMs;
   }
 
   delay(20);

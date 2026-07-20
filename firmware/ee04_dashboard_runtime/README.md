@@ -1,75 +1,77 @@
-# Phase 1.5B.1 — Téléchargement dashboard binaire sans affichage
+# Phase 1.5B.2 � telechargement valide puis affichage ePaper
 
 ## Objectif
 
-Cette phase implémente un firmware stable qui :
-- télécharge `dashboard.bin` depuis `DASHBOARD_URL` (défini dans `include/wifi_secrets.h`),
-- valide strictement le contenu binaire,
-- enregistre l'image dans LittleFS,
-- remplace de façon atomique le fichier précédent uniquement après validation complète,
-- sans encore rafraîchir l'écran e-paper.
+Ajouter l affichage de `/dashboard.bin` sur l ecran ePaper du EE04 avec le flux suivant:
+- telechargement depuis le Raspberry Pi
+- validation binaire strictement `1 octet par pixel`
+- ecriture atomique dans LittleFS
+- affichage uniquement apres validation complete
 
-## Paramètres de format
+## Flux fonctionnel
 
-- Résolution cible : **800 x 480**
-- Format : **1 octet par pixel**
-- Taille attendue : **384000 octets**
-- Chaque octet doit être compris entre **0 et 5**
+1. Le firmware telecharge `dashboard.bin` via HTTP et conserve `/dashboard.tmp` pendant le telechargement.
+2. Le fichier est valide si:
+   - code HTTP = `200`
+   - taille exacte = `384000` octets
+   - chaque octet compris entre `0` et `5`
+3. En cas de succ?s, remplacement atomique:
+   - `/dashboard.tmp` remplace `/dashboard.bin`
+   - ancien fichier retire uniquement apres succes complet
+4. L affichage n est effectue que si le telechargement est valide.
+5. Le rendu pixel par pixel est realise ligne par ligne sans charger l image complete en RAM.
 
-## Comportement du remplacement
+## Format attendue binaire
 
-- Le téléchargement s'effectue dans `/dashboard.tmp`.
-- Le fichier temporaire est validé (taille et plages de valeurs) avant remplacement.
-- En cas d'erreur de validation ou de réseau, `/dashboard.tmp` est supprimé et l'ancien `/dashboard.bin` est conservé.
-- En cas de succès, `/dashboard.tmp` remplace `/dashboard.bin` de manière atomique.
+- Resolution: `800 x 480`
+- Taille: `384000` octets
+- Palette:
+  - `0 -> noir`
+  - `1 -> blanc`
+  - `2 -> rouge`
+  - `3 -> jaune`
+  - `4 -> vert`
+  - `5 -> bleu`
+
+## Comportement ePaper
+
+- Palette et constantes mappes sur les couleurs Seeed/GFX
+- Tampon initialise en blanc avant dessin.
+- Lecture du fichier avec petit tampon (1024 octets).
+- Dessin ligne par ligne avec `drawPixel`.
+- Rapport console toutes ~50 lignes (`Ligne 50 / 480`, etc).
+- `epaper.update()` appele une seule fois par cycle reussi.
+- Si un affichage echoue, l image precedente reste visible.
 
 ## Build / Upload / Monitor
 
-Depuis `firmware/ee04_dashboard_runtime` :
+Depuis `firmware/ee04_dashboard_runtime`:
 - `pio run`
 - `pio run -t upload`
 - `pio device monitor -b 115200`
 
-## Rythme d'exécution
+## Cadence
 
-- 1er téléchargement : ~5 secondes après démarrage
-- Téléchargements suivants : toutes les 5 minutes
-- Rapport d'état : toutes les 10 secondes
-- Aucune attente bloquante de 300000 ms (planification via `millis()`)
+- 1er telechargement au demarrage + ~5 secondes.
+- Telechargement + affichage toutes les 5 minutes (prochaine iteration basee sur fin complete du cycle).
+- Rapport d etat toutes les 10 secondes.
 
-## Détails observables sur la liaison série
+## Test manuel (5 cycles minimum)
 
-Au démarrage :
-- nom du projet
-- phase
-- raison du redémarrage
-- MAC
-- état et espace LittleFS
+1. Lancer le moniteur serie en 115200.
+2. Verifier au demarrage:
+   - boot info (projet, phase, reboot, MAC, LittleFS)
+   - affichage initial si `/dashboard.bin` valide present.
+3. Attendre au moins 5 cycles.
+4. Verifier pour chaque cycle:
+   - code HTTP, MIME, octets recus, durees de telechargement/dessin/refresh, RSSI
+   - etat final `SUCCES` ou `ECHEC`
+5. Verifier en cas d erreur d affichage que l ancienne image reste visible (pas de ecran vide ni nouveau fichier partiel).
 
-Pour chaque cycle :
-- code HTTP
-- MIME (`application/octet-stream` attendu)
-- octets reçus
-- taille du fichier final
-- délai de téléchargement
-- RSSI
-- nombre d'octets invalides
-- `SUCCES` ou `ECHEC`
+## Contraintes appliquees
 
-## Test manuel de 20 cycles
-
-1. Démarrer le moniteur série en 115200.
-2. Vérifier qu'un premier cycle se lance autour de `+5s`.
-3. Laisser fonctionner 20 cycles (~100 minutes, cadence 5 min).
-4. Contrôler les logs :
-   - chaque cycle doit afficher un résultat `SUCCES` ou `ECHEC`,
-   - en succès, vérifier l'affichage du résultat et de la taille 384000,
-   - en échec réseau, vérifier que l'ancien `/dashboard.bin` reste présent.
-
-## Limites actuelles de la phase
-
-- Pas d'initialisation écran / affichage e-paper.
-- Pas de PNG, ni Home Assistant.
 - Pas de deep sleep.
-- Pas de bouton.
-- Pas d'autoload (build/upload/monitor non lancés automatiquement).
+- Pas d usage de PNG.
+- Pas de Home Assistant.
+- Pas d upload automatique.
+- Pas de modification de `platformio.ini`, `include/wifi_secrets.h`, `lib/driver/driver.h`, `lib/Seeed_GFX`.
