@@ -12,6 +12,8 @@ config.local.json
 
 data/*.json
 output/*.png
+output/dashboard.bin
+output/dashboard_spectra6.png
 generated/
 
 .vscode/
