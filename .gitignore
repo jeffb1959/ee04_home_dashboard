@@ -11,6 +11,8 @@ secrets.json
 config.local.json
 
 data/*.json
+# Dernière lecture BME280 locale; peut refléter des données domestiques.
+data/home_assistant_cache.json
 output/*.png
 output/dashboard.bin
 output/dashboard_spectra6.png

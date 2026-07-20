@@ -1,4 +1,4 @@
-"""Routes Flask du tableau de bord EE04 (phase 1.5A)."""
+"""Routes Flask du tableau de bord EE04 (phase 1.6A)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,9 @@ from tempfile import NamedTemporaryFile
 from flask import Flask, Response, jsonify, send_file, url_for
 from PIL import Image
 
+from config import load_home_assistant_config
 from dashboard_renderer import render_dashboard
+from home_assistant_client import HomeAssistantClient
 from spectra6_converter import BINARY_SIZE, ConversionResult, IMAGE_SIZE, convert_hybrid
 
 
@@ -21,6 +23,7 @@ OUTPUT_BINARY_FILE = OUTPUT_DIR / "dashboard.bin"
 OUTPUT_SPECTRA6_FILE = OUTPUT_DIR / "dashboard_spectra6.png"
 
 app = Flask(__name__)
+home_assistant_client = HomeAssistantClient(load_home_assistant_config())
 
 
 def add_no_cache_headers(response: Response) -> Response:
@@ -35,7 +38,8 @@ def add_no_cache_headers(response: Response) -> Response:
 def _render_source_image() -> Image.Image:
     """Génère et valide l'unique image RGB source d'une requête."""
 
-    image = render_dashboard()
+    bme280_data = home_assistant_client.get_bme280_data()
+    image = render_dashboard(bme280_data=bme280_data)
     if image.size != IMAGE_SIZE:
         raise ValueError(
             f"Le renderer doit produire une image {IMAGE_SIZE[0]} x {IMAGE_SIZE[1]}"
@@ -168,14 +172,15 @@ def dashboard_spectra6_png() -> Response | tuple[Response, int]:
 
 @app.get("/health")
 def health() -> Response:
-    """Expose l'état minimal du service pour les vérifications automatiques."""
+    """Expose l'état du service sans révéler le jeton Home Assistant."""
 
     return jsonify(
         status="ok",
         service="ee04_home_dashboard",
-        phase="1.1",
+        phase="1.6A",
         binary_format="spectra6-indexed-1-byte-per-pixel",
         binary_size=BINARY_SIZE,
+        home_assistant=home_assistant_client.health_status(),
     )
 
 

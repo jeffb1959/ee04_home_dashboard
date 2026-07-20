@@ -1,8 +1,10 @@
-"""Composition visuelle du tableau de bord EE04 (phase 1.1)."""
+"""Composition visuelle du tableau de bord EE04 (phase 1.6A)."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps, UnidentifiedImageError
 
@@ -143,8 +145,40 @@ def _add_weather_panel(image: Image.Image) -> Image.Image:
     return Image.alpha_composite(image.convert("RGBA"), overlay).convert("RGB")
 
 
-def _draw_weather(draw: ImageDraw.ImageDraw) -> None:
-    """Dessine les données météo fictives dans la zone de droite."""
+def _format_measurement(
+    data: Mapping[str, Any] | None,
+    name: str,
+) -> tuple[str, str]:
+    """Formate une mesure BME280 ou son placeholder lisible."""
+
+    default_units = {"temperature": "°C", "humidity": "%", "pressure": "hPa"}
+    placeholders = {"temperature": "--", "humidity": "--", "pressure": "----"}
+    measurement = data.get(name, {}) if data else {}
+    unit = str(measurement.get("unit") or default_units[name])
+    value = measurement.get("value")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return placeholders[name], unit
+
+    if name == "temperature":
+        formatted = f"{value:.1f}".replace(".", ",")
+        if formatted.endswith(",0"):
+            formatted = formatted[:-2]
+    else:
+        formatted = f"{value:.0f}"
+    return formatted, unit
+
+
+def _draw_weather(
+    draw: ImageDraw.ImageDraw,
+    bme280_data: Mapping[str, Any] | None,
+) -> None:
+    """Dessine la météo fictive et les vraies mesures extérieures BME280."""
+
+    temperature, temperature_unit = _format_measurement(
+        bme280_data, "temperature"
+    )
+    humidity, humidity_unit = _format_measurement(bme280_data, "humidity")
+    pressure, pressure_unit = _format_measurement(bme280_data, "pressure")
 
     draw.text((514, 50), "MÉTÉO", font=load_font(14, bold=True), fill=MUTED_TEXT_COLOR)
     draw.text((514, 75), "Québec", font=load_font(25, bold=True), fill=TEXT_COLOR)
@@ -164,9 +198,24 @@ def _draw_weather(draw: ImageDraw.ImageDraw) -> None:
         font=load_font(13, bold=True),
         fill=MUTED_TEXT_COLOR,
     )
-    draw.text((514, 252), "22,4 °C", font=load_font(25, bold=True), fill=TEXT_COLOR)
-    draw.text((630, 257), "Humidité 64 %", font=load_font(14), fill=TEXT_COLOR)
-    draw.text((514, 291), "Pression 1012 hPa", font=load_font(14), fill=TEXT_COLOR)
+    draw.text(
+        (514, 252),
+        f"{temperature} {temperature_unit}",
+        font=load_font(25, bold=True),
+        fill=TEXT_COLOR,
+    )
+    draw.text(
+        (630, 257),
+        f"Humidité {humidity} {humidity_unit}",
+        font=load_font(14),
+        fill=TEXT_COLOR,
+    )
+    draw.text(
+        (514, 291),
+        f"Pression {pressure} {pressure_unit}",
+        font=load_font(14),
+        fill=TEXT_COLOR,
+    )
 
 
 def _draw_mgm(draw: ImageDraw.ImageDraw) -> None:
@@ -212,6 +261,7 @@ def _draw_diagnostics(draw: ImageDraw.ImageDraw) -> None:
 
 def render_dashboard(
     background_path: str | Path = DEFAULT_BACKGROUND_PATH,
+    bme280_data: Mapping[str, Any] | None = None,
 ) -> Image.Image:
     """Produit l'image complète du tableau de bord au format RGB 800 x 480."""
 
@@ -221,7 +271,7 @@ def render_dashboard(
     image = _add_weather_panel(image)
 
     draw = ImageDraw.Draw(image)
-    _draw_weather(draw)
+    _draw_weather(draw, bme280_data)
     _draw_mgm(draw)
     _draw_diagnostics(draw)
     return image

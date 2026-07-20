@@ -4,14 +4,52 @@ import sys
 from io import BytesIO
 from pathlib import Path
 
+import pytest
 from PIL import Image
 
 RACINE_PROJET = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RACINE_PROJET))
 
-from app import app
+import app as app_module
 from dashboard_renderer import render_dashboard
 from spectra6_converter import IMAGE_SIZE, convert_hybrid, is_protected_pixel
+
+
+app = app_module.app
+
+
+class FakeHomeAssistantClient:
+    """Évite tout accès réseau dans les tests des routes Flask."""
+
+    def get_bme280_data(self) -> dict:
+        return {
+            "temperature": {"value": None, "unit": "°C", "ok": False},
+            "humidity": {"value": None, "unit": "%", "ok": False},
+            "pressure": {"value": None, "unit": "hPa", "ok": False},
+            "source": "fallback",
+            "error": "simulation hors ligne",
+        }
+
+    def health_status(self) -> dict:
+        return {
+            "configured": False,
+            "last_fetch_ok": False,
+            "source": "fallback",
+            "entities": {
+                "temperature": "",
+                "humidity": "",
+                "pressure": "",
+            },
+        }
+
+
+@pytest.fixture(autouse=True)
+def isolate_home_assistant(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rend les tests déterministes, quel que soit le `.env` de la machine."""
+
+    monkeypatch.setattr(
+        app_module, "home_assistant_client", FakeHomeAssistantClient()
+    )
 
 
 def test_health_returns_ok() -> None:
@@ -23,6 +61,8 @@ def test_health_returns_ok() -> None:
     assert response.status_code == 200
     assert response.get_json()["status"] == "ok"
     assert response.get_json()["binary_size"] == 384000
+    assert response.get_json()["home_assistant"]["source"] == "fallback"
+    assert "token" not in response.get_data(as_text=True).lower()
 
 
 def test_dashboard_returns_an_800_by_480_png() -> None:
