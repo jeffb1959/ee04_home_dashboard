@@ -1,4 +1,4 @@
-"""Routes Flask du tableau de bord EE04 (phase 1.6A)."""
+"""Routes Flask du tableau de bord EE04 (phase 1.6B)."""
 
 from __future__ import annotations
 
@@ -39,7 +39,11 @@ def _render_source_image() -> Image.Image:
     """Génère et valide l'unique image RGB source d'une requête."""
 
     bme280_data = home_assistant_client.get_bme280_data()
-    image = render_dashboard(bme280_data=bme280_data)
+    weather_data = home_assistant_client.get_weather_data()
+    image = render_dashboard(
+        bme280_data=bme280_data,
+        weather_data=weather_data,
+    )
     if image.size != IMAGE_SIZE:
         raise ValueError(
             f"Le renderer doit produire une image {IMAGE_SIZE[0]} x {IMAGE_SIZE[1]}"
@@ -177,10 +181,11 @@ def health() -> Response:
     return jsonify(
         status="ok",
         service="ee04_home_dashboard",
-        phase="1.6A",
+        phase="1.6B",
         binary_format="spectra6-indexed-1-byte-per-pixel",
         binary_size=BINARY_SIZE,
         home_assistant=home_assistant_client.health_status(),
+        weather=home_assistant_client.weather_health_status(),
     )
 
 

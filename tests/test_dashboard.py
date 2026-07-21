@@ -30,6 +30,17 @@ class FakeHomeAssistantClient:
             "error": "simulation hors ligne",
         }
 
+    def get_weather_data(self) -> dict:
+        return {
+            "condition_raw": None,
+            "condition_fr": "Données indisponibles",
+            "temperature": {"value": None, "unit": "°C", "ok": False},
+            "humidity": {"value": None, "unit": "%", "ok": False},
+            "pressure": {"value": None, "unit": "", "ok": False},
+            "source": "fallback",
+            "error": "simulation hors ligne",
+        }
+
     def health_status(self) -> dict:
         return {
             "configured": False,
@@ -40,6 +51,16 @@ class FakeHomeAssistantClient:
                 "humidity": "",
                 "pressure": "",
             },
+        }
+
+    def weather_health_status(self) -> dict:
+        return {
+            "configured": False,
+            "entity_id": "",
+            "last_fetch_ok": False,
+            "source": "fallback",
+            "condition_raw": None,
+            "condition_fr": "Données indisponibles",
         }
 
 
@@ -62,6 +83,7 @@ def test_health_returns_ok() -> None:
     assert response.get_json()["status"] == "ok"
     assert response.get_json()["binary_size"] == 384000
     assert response.get_json()["home_assistant"]["source"] == "fallback"
+    assert response.get_json()["weather"]["source"] == "fallback"
     assert "token" not in response.get_data(as_text=True).lower()
 
 

@@ -1,4 +1,4 @@
-"""Composition visuelle du tableau de bord EE04 (phase 1.6A)."""
+"""Composition visuelle du tableau de bord EE04 (phase 1.6B)."""
 
 from __future__ import annotations
 
@@ -168,11 +168,67 @@ def _format_measurement(
     return formatted, unit
 
 
+def _format_weather_measurement(
+    data: Mapping[str, Any] | None,
+    name: str,
+) -> tuple[str, str]:
+    """Formate une mesure de l'entité météo avec une virgule décimale."""
+
+    default_units = {"temperature": "°C", "humidity": "%", "pressure": ""}
+    placeholders = {"temperature": "--", "humidity": "--", "pressure": "--"}
+    measurement = data.get(name, {}) if data else {}
+    unit = str(measurement.get("unit") or default_units[name])
+    value = measurement.get("value")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return placeholders[name], unit
+
+    if name == "temperature":
+        formatted = f"{value:.1f}".rstrip("0").rstrip(".")
+    elif name == "humidity":
+        formatted = f"{value:.0f}"
+    else:
+        formatted = f"{value:.2f}".rstrip("0").rstrip(".")
+    return formatted.replace(".", ","), unit
+
+
+def _fit_weather_condition(
+    draw: ImageDraw.ImageDraw,
+    condition: str,
+    max_width: int = 232,
+) -> tuple[str, ImageFont.FreeTypeFont | ImageFont.ImageFont]:
+    """Réduit puis tronque une condition pour la garder dans le panneau."""
+
+    for size in range(19, 12, -1):
+        font = load_font(size)
+        if draw.textlength(condition, font=font) <= max_width:
+            return condition, font
+
+    font = load_font(13)
+    shortened = condition
+    while shortened and draw.textlength(f"{shortened}…", font=font) > max_width:
+        shortened = shortened[:-1]
+    return f"{shortened.rstrip()}…", font
+
+
 def _draw_weather(
     draw: ImageDraw.ImageDraw,
     bme280_data: Mapping[str, Any] | None,
+    weather_data: Mapping[str, Any] | None,
 ) -> None:
-    """Dessine la météo fictive et les vraies mesures extérieures BME280."""
+    """Dessine la météo principale et les mesures extérieures BME280."""
+
+    weather_temperature, weather_temperature_unit = _format_weather_measurement(
+        weather_data, "temperature"
+    )
+    weather_humidity, weather_humidity_unit = _format_weather_measurement(
+        weather_data, "humidity"
+    )
+    weather_pressure, weather_pressure_unit = _format_weather_measurement(
+        weather_data, "pressure"
+    )
+    condition = str(
+        (weather_data or {}).get("condition_fr") or "Données indisponibles"
+    )
 
     temperature, temperature_unit = _format_measurement(
         bme280_data, "temperature"
@@ -181,13 +237,20 @@ def _draw_weather(
     pressure, pressure_unit = _format_measurement(bme280_data, "pressure")
 
     draw.text((514, 50), "MÉTÉO", font=load_font(14, bold=True), fill=MUTED_TEXT_COLOR)
-    draw.text((514, 75), "Québec", font=load_font(25, bold=True), fill=TEXT_COLOR)
-    draw.text((514, 106), "23 °C", font=load_font(45, bold=True), fill=TEXT_COLOR)
-    draw.text((514, 158), "Beau temps", font=load_font(20), fill=TEXT_COLOR)
+    draw.text((514, 75), "Maison", font=load_font(25, bold=True), fill=TEXT_COLOR)
+    draw.text(
+        (514, 106),
+        f"{weather_temperature} {weather_temperature_unit}".rstrip(),
+        font=load_font(45, bold=True),
+        fill=TEXT_COLOR,
+    )
+    condition, condition_font = _fit_weather_condition(draw, condition)
+    draw.text((514, 158), condition, font=condition_font, fill=TEXT_COLOR)
     draw.text(
         (514, 190),
-        "Max 26 °C  •  Min 17 °C",
-        font=load_font(15),
+        f"Hum. {weather_humidity} {weather_humidity_unit}  •  "
+        f"{weather_pressure} {weather_pressure_unit}".rstrip(),
+        font=load_font(14),
         fill=MUTED_TEXT_COLOR,
     )
     draw.line((514, 219, 746, 219), fill=(177, 132, 79), width=1)
@@ -262,6 +325,7 @@ def _draw_diagnostics(draw: ImageDraw.ImageDraw) -> None:
 def render_dashboard(
     background_path: str | Path = DEFAULT_BACKGROUND_PATH,
     bme280_data: Mapping[str, Any] | None = None,
+    weather_data: Mapping[str, Any] | None = None,
 ) -> Image.Image:
     """Produit l'image complète du tableau de bord au format RGB 800 x 480."""
 
@@ -271,7 +335,7 @@ def render_dashboard(
     image = _add_weather_panel(image)
 
     draw = ImageDraw.Draw(image)
-    _draw_weather(draw, bme280_data)
+    _draw_weather(draw, bme280_data, weather_data)
     _draw_mgm(draw)
     _draw_diagnostics(draw)
     return image

@@ -1,13 +1,14 @@
 # EE04 Home Dashboard
 
-## Phase 1.6A
+## Phase 1.6B
 
 Le serveur Flask génère avec Pillow une maquette réaliste de 800 × 480 pixels à
-partir d'un arrière-plan illustré. La phase 1.6A remplace les trois mesures de
-la section **EXTÉRIEUR** par la température, l'humidité et la pression d'un
-BME280 exposé dans Home Assistant. Le serveur conserve la conversion hybride
-vers la palette Spectra 6 et le fichier de 384 000 octets consommé par le
-firmware EE04.
+partir d'un arrière-plan illustré. La phase 1.6B alimente la météo principale
+avec l'état actuel de `weather.forecast_maison` : condition traduite en
+français, température, humidité et pression. La section **EXTÉRIEUR** demeure
+distincte et continue d'afficher les trois mesures du BME280 exposé dans Home
+Assistant. Le serveur conserve la conversion hybride vers la palette Spectra
+6 et le fichier de 384 000 octets consommé par le firmware EE04.
 
 La logique visuelle se trouve dans `dashboard_renderer.py`; `app.py` conserve
 les routes HTTP et délègue la création de l'image au renderer. La conversion
@@ -32,12 +33,15 @@ HOME_ASSISTANT_TOKEN=JETON_LONGUE_DUREE
 HA_ENTITY_TEMPERATURE=sensor.xxx
 HA_ENTITY_HUMIDITY=sensor.xxx
 HA_ENTITY_PRESSURE=sensor.xxx
+HA_ENTITY_WEATHER=weather.forecast_maison
 ```
 
 `HOME_ASSISTANT_URL` doit être l'adresse joignable de Home Assistant depuis le
 Raspberry Pi. Ne pas ajouter `/api` à cette adresse. Les identifiants d'entité
 peuvent être vérifiés dans Home Assistant, dans **Outils de développement →
-États**, en recherchant les trois capteurs du BME280.
+États**, en recherchant les trois capteurs du BME280 et l'entité météo.
+`HA_ENTITY_WEATHER` désigne uniquement la météo principale; elle ne remplace
+pas les entités BME280 de la section **EXTÉRIEUR**.
 
 Pour créer le jeton, ouvrir le profil utilisateur Home Assistant, aller à la
 section **Jetons d'accès longue durée**, créer un jeton dédié au tableau de
@@ -51,15 +55,18 @@ simple `NOM=valeur` est chargé directement par `config.py`.
 
 ### Tolérance aux pannes et cache
 
-Chaque rendu demande les trois entités par `GET /api/states/<entity_id>` avec
-l'en-tête `Authorization: Bearer …`. Les états `unknown`, `unavailable`, les
-réponses non numériques, une entité absente, un jeton refusé et les pannes
-réseau sont journalisés sans interrompre Flask.
+Chaque rendu demande les trois entités BME280 et l'entité météo par
+`GET /api/states/<entity_id>` avec l'en-tête `Authorization: Bearer …`. Les
+états `unknown`, `unavailable`, les réponses non numériques, les attributs
+météo manquants, une entité absente, un jeton refusé et les pannes réseau sont
+journalisés sans interrompre Flask.
 
-Après une lecture réussie, la dernière valeur valide est écrite atomiquement
-dans `data/home_assistant_cache.json`. Si une lecture suivante échoue, la
-valeur en cache est affichée. Sans cache, les placeholders `-- °C`, `-- %` et
-`---- hPa` sont utilisés. `.env` et ce cache sont ignorés par Git.
+Après une lecture réussie, les dernières valeurs BME280 et météo valides sont
+écrites atomiquement dans `data/home_assistant_cache.json`, dans des sections
+distinctes. Si une lecture suivante échoue, les valeurs en cache sont
+affichées. Sans cache, une condition « Données indisponibles » et les
+placeholders `-- °C`, `-- %` et `--`/`----` pour la pression sont utilisés.
+`.env` et ce cache sont ignorés par Git.
 
 ## Arrière-plan
 
@@ -71,7 +78,8 @@ assets/backgrounds/lundi_beau.png
 
 L'arrière-plan est adapté en haute qualité à une zone supérieure de
 800 × 360 pixels, en conservant son ratio et avec un léger recadrage si
-nécessaire. La météo reste dans cette partie illustrée.
+nécessaire. La météo principale issue de `weather.forecast_maison` reste dans
+cette partie illustrée; le BME280 conserve sa zone **EXTÉRIEUR**.
 
 Les 120 pixels inférieurs forment une bande crème opaque et indépendante de
 l'illustration. Elle contient les quatre lignes de l'activité MGM fictive,
@@ -129,9 +137,9 @@ wc -c /tmp/dashboard.bin
 ```
 
 La dernière commande doit afficher `384000`. Ouvrir `/dashboard.png` dans un
-navigateur permet de vérifier visuellement les mesures de la section
-**EXTÉRIEUR**; `/dashboard-spectra6.png` permet de vérifier leur lisibilité
-après conversion.
+navigateur permet de vérifier visuellement la météo principale et les mesures
+distinctes de la section **EXTÉRIEUR**; `/dashboard-spectra6.png` permet de
+vérifier leur lisibilité après conversion.
 
 `/health` conserve l'état général du service et ajoute un objet de ce type :
 
@@ -146,13 +154,22 @@ après conversion.
       "humidity": "sensor.bme280_humidity",
       "pressure": "sensor.bme280_pressure"
     }
+  },
+  "weather": {
+    "configured": true,
+    "entity_id": "weather.forecast_maison",
+    "last_fetch_ok": true,
+    "source": "live",
+    "condition_raw": "cloudy",
+    "condition_fr": "Nuageux"
   }
 }
 ```
 
-`source` vaut `live`, `cache` ou `fallback`. Le jeton n'est jamais retourné.
-`/health` reflète la dernière tentative effectuée par une route de rendu; il ne
-déclenche pas lui-même de requête vers Home Assistant.
+Pour les deux diagnostics, `source` vaut `live`, `cache` ou `fallback`. Le
+jeton n'est jamais retourné. `/health` reflète la dernière tentative effectuée
+par une route de rendu; il ne déclenche pas lui-même de requête vers Home
+Assistant.
 
 ## Format binaire Spectra 6
 
@@ -194,16 +211,17 @@ nécessite ni serveur Home Assistant ni vrai jeton. La suite vérifie aussi que
 `/dashboard.png` reste disponible, que `/dashboard.bin` contient exactement
 384 000 octets et que `/health` n'expose aucun secret.
 
-## Ce qui reste fictif
+## Ce qui reste fictif ou non intégré
 
-Après la phase 1.6A, seules les trois mesures de la section **EXTÉRIEUR**
-proviennent du BME280 par Home Assistant. Restent fictifs :
+Après la phase 1.6B, la météo actuelle principale provient de
+`weather.forecast_maison` et la section **EXTÉRIEUR** provient toujours du
+BME280. Restent fictifs ou volontairement absents :
 
-- la météo principale de Québec, son état et ses températures minimale et
-  maximale;
+- les températures minimale et maximale et les prévisions détaillées;
+- les alertes météo et toute intégration MGM supplémentaire;
 - la prochaine activité MGM et les participants;
 - les données de diagnostic Wi-Fi, l'heure de mise à jour et l'état affiché;
-- toute donnée Outlook, Chronogolf ou alerte météo.
+- toute donnée Outlook ou Chronogolf.
 
 Cette phase ne modifie ni les projets firmware, ni les arrière-plans, ni la
 logique Spectra 6 côté EE04.

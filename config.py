@@ -45,13 +45,14 @@ def _read_env_file(path: Path) -> dict[str, str]:
 
 @dataclass(frozen=True)
 class HomeAssistantConfig:
-    """Paramètres nécessaires à la lecture du BME280 dans Home Assistant."""
+    """Paramètres nécessaires aux lectures Home Assistant du tableau de bord."""
 
     url: str
     token: str = field(repr=False)
     temperature_entity: str
     humidity_entity: str
     pressure_entity: str
+    weather_entity: str = ""
 
     @property
     def configured(self) -> bool:
@@ -77,6 +78,12 @@ class HomeAssistantConfig:
             "pressure": self.pressure_entity,
         }
 
+    @property
+    def weather_configured(self) -> bool:
+        """Indique si la source météo principale peut être interrogée."""
+
+        return bool(self.url and self.token and self.weather_entity)
+
 
 def load_home_assistant_config(
     env_file: str | Path = DEFAULT_ENV_FILE,
@@ -96,4 +103,5 @@ def load_home_assistant_config(
         temperature_entity=get_value("HA_ENTITY_TEMPERATURE"),
         humidity_entity=get_value("HA_ENTITY_HUMIDITY"),
         pressure_entity=get_value("HA_ENTITY_PRESSURE"),
+        weather_entity=get_value("HA_ENTITY_WEATHER"),
     )
