@@ -1,31 +1,43 @@
 # EE04 Home Dashboard
 
-## Phase 1.6B
+## Phase 1.6C
 
-Le serveur Flask génère avec Pillow une maquette réaliste de 800 × 480 pixels à
-partir d'un arrière-plan illustré. La phase 1.6B alimente la météo principale
-avec l'état actuel de `weather.forecast_maison` : condition traduite en
-français, température, humidité et pression. La section **EXTÉRIEUR** demeure
-distincte et continue d'afficher les trois mesures du BME280 exposé dans Home
-Assistant. Le serveur conserve la conversion hybride vers la palette Spectra
-6 et le fichier de 384 000 octets consommé par le firmware EE04.
+La phase **1.6C** passe Environnement Canada comme source météo principale.
 
-La logique visuelle se trouve dans `dashboard_renderer.py`; `app.py` conserve
-les routes HTTP et délègue la création de l'image au renderer. La conversion
-isolée dans `spectra6_converter.py` utilise uniquement Pillow et Python, sans
-NumPy. `config.py` charge la configuration locale et
-`home_assistant_client.py` contient le client REST et le repli sur cache.
+Le serveur Flask continue de générer :
 
-## Configuration Home Assistant
+- `dashboard.png` (affichage 800 × 480 pour l’EPaper)
+- `dashboard.bin` (format Spectra 6, 384 000 octets)
+- `dashboard-spectra6.png` (aperçu conversion)
 
-Copier le modèle local, puis remplacer ses valeurs :
+Le flux BME280 reste inchangé et conserve la carte **CAPTEUR EXTÉRIEUR**.
+
+La carte météo principale affiche maintenant :
+
+- `CONDITIONS ACTUELLES`
+- température actuelle
+- condition
+- probabilité de précipitations
+- min. et max.
+- humidité
+- pression
+- direction et vitesse du vent
+
+Un bandeau rouge **ALERTE MÉTÉO** est affiché en haut de l’écran uniquement quand une alerte est active.
+
+## Configuration
+
+Les variables sont lues de `.env`, puis écrasées par l’environnement courant.
+Le token reste en mémoire et ne doit jamais être copié dans `.env.example`, les logs ou `/health`.
+
+Copier le modèle :
 
 ```bash
 cp .env.example .env
 chmod 600 .env
 ```
 
-Variables obligatoires dans `.env` :
+Variables :
 
 ```dotenv
 HOME_ASSISTANT_URL=http://IP_OU_HOST:8123
@@ -34,70 +46,93 @@ HA_ENTITY_TEMPERATURE=sensor.xxx
 HA_ENTITY_HUMIDITY=sensor.xxx
 HA_ENTITY_PRESSURE=sensor.xxx
 HA_ENTITY_WEATHER=weather.forecast_maison
+
+HA_EC_WEATHER_ENTITY=weather.atelier_jeff_meteo_quebec_previsions
+HA_EC_CONDITION=sensor.atelier_jeff_meteo_quebec_condition_actuelle
+HA_EC_TEMPERATURE=sensor.atelier_jeff_meteo_quebec_temperature
+HA_EC_HUMIDITY=sensor.atelier_jeff_meteo_quebec_humidite
+HA_EC_PRESSURE=sensor.atelier_jeff_meteo_quebec_pression
+HA_EC_WIND_DIRECTION_TEXT=sensor.atelier_jeff_meteo_quebec_direction_du_vent_2
+HA_EC_WIND_SPEED=sensor.atelier_jeff_meteo_quebec_vitesse_du_vent
+HA_EC_PRECIP_PROBABILITY=sensor.atelier_jeff_meteo_quebec_probabilite_de_precipitations
+HA_EC_HIGH_TEMP=sensor.atelier_jeff_meteo_quebec_haute_temperature
+HA_EC_LOW_TEMP=sensor.atelier_jeff_meteo_quebec_basse_temperature
+HA_EC_SUMMARY=sensor.atelier_jeff_meteo_quebec_resume
+HA_EC_ALERTS=sensor.atelier_jeff_meteo_quebec_alertes
+HA_EC_ADVISORIES=sensor.atelier_jeff_meteo_quebec_avis
+HA_EC_WATCHES=sensor.atelier_jeff_meteo_quebec_veilles
+HA_EC_BULLETINS=sensor.atelier_jeff_meteo_quebec_bulletins
 ```
 
-`HOME_ASSISTANT_URL` doit être l'adresse joignable de Home Assistant depuis le
-Raspberry Pi. Ne pas ajouter `/api` à cette adresse. Les identifiants d'entité
-peuvent être vérifiés dans Home Assistant, dans **Outils de développement →
-États**, en recherchant les trois capteurs du BME280 et l'entité météo.
-`HA_ENTITY_WEATHER` désigne uniquement la météo principale; elle ne remplace
-pas les entités BME280 de la section **EXTÉRIEUR**.
+`HOME_ASSISTANT_URL` doit être l’adresse joignable depuis le Pi, sans `/api`.
 
-Pour créer le jeton, ouvrir le profil utilisateur Home Assistant, aller à la
-section **Jetons d'accès longue durée**, créer un jeton dédié au tableau de
-bord, puis le copier immédiatement dans `.env`. Home Assistant n'affiche le
-jeton complet qu'au moment de sa création. Ne jamais le placer dans
-`.env.example`, le README, un journal ou Git.
+## Architecture
 
-Les variables déjà présentes dans l'environnement du processus ont priorité
-sur celles de `.env`. Le projet n'ajoute pas de bibliothèque dotenv : le format
-simple `NOM=valeur` est chargé directement par `config.py`.
+- `config.py` charge la configuration, y compris les nouvelles entités Environnement Canada.
+- `home_assistant_client.py` lit les entités par `GET /api/states/<entity_id>`, avec cache et fallback.
+- `dashboard_renderer.py` formate la carte météo et la carte capteur.
+- `app.py` expose les routes HTTP et alimente le rendu depuis `get_environment_canada_data()`.
 
-### Tolérance aux pannes et cache
+Le client continue à réutiliser l’ancienne structure météo (`get_weather_data`) pour conserver une compatibilité minimale si la configuration Environnement Canada n’est pas complète.
 
-Chaque rendu demande les trois entités BME280 et l'entité météo par
-`GET /api/states/<entity_id>` avec l'en-tête `Authorization: Bearer …`. Les
-états `unknown`, `unavailable`, les réponses non numériques, les attributs
-météo manquants, une entité absente, un jeton refusé et les pannes réseau sont
-journalisés sans interrompre Flask.
+## Gestion des données et tolérance
 
-Après une lecture réussie, les dernières valeurs BME280 et météo valides sont
-écrites atomiquement dans `data/home_assistant_cache.json`, dans des sections
-distinctes. Si une lecture suivante échoue, les valeurs en cache sont
-affichées. Sans cache, une condition « Données indisponibles » et les
-placeholders `-- °C`, `-- %` et `--`/`----` pour la pression sont utilisés.
-`.env` et ce cache sont ignorés par Git.
+Pour chaque entité Home Assistant :
 
-## Arrière-plan
+- `unknown`
+- `unavailable`
+- chaîne vide
+- erreurs réseau
 
-Le fichier utilisé par défaut doit se trouver ici :
+sont traités comme données non valides.
 
-```text
-assets/backgrounds/lundi_beau.png
+Le système :
+
+- convertit proprement les valeurs numériques,
+- garde les unités envoyées par Home Assistant,
+- continue de fonctionner sur cache quand possible,
+- évite tout arrêt de Flask même avec données incomplètes.
+
+### Alertes météo
+
+Les compteurs suivants sont lus :
+
+- `HA_EC_ALERTS`
+- `HA_EC_ADVISORIES`
+- `HA_EC_WATCHES`
+- `HA_EC_BULLETINS`
+
+Une alerte est active si au moins un compteur est supérieur à zéro.
+
+Le texte compact peut produire par exemple :
+
+- `1 alerte`
+- `1 veille / 1 bulletin`
+- `1 alerte / 2 avis`
+
+Le bandeau `ALERTE MÉTÉO` n’est affiché que si ce texte existe.
+
+## `/health`
+
+Nouveau bloc ajouté :
+
+```json
+{
+  "environment_canada": {
+    "configured": true,
+    "last_fetch_ok": true,
+    "source": "live",
+    "condition": "Généralement nuageux",
+    "alert_active": false,
+    "alert_text": null,
+    "entities": {...}
+  }
+}
 ```
 
-L'arrière-plan est adapté en haute qualité à une zone supérieure de
-800 × 360 pixels, en conservant son ratio et avec un léger recadrage si
-nécessaire. La météo principale issue de `weather.forecast_maison` reste dans
-cette partie illustrée; le BME280 conserve sa zone **EXTÉRIEUR**.
-
-Les 120 pixels inférieurs forment une bande crème opaque et indépendante de
-l'illustration. Elle contient les quatre lignes de l'activité MGM fictive,
-puis une dernière ligne plus discrète réservée au diagnostic.
-
-Si le fichier est absent ou illisible, le serveur génère automatiquement une
-image de secours claire portant le message `ARRIÈRE-PLAN INTROUVABLE`. La route
-`/dashboard.png` reste donc disponible et retourne toujours l'image couleur
-originale, sans conversion ni tramage.
-
-Le rendu privilégie les polices système de Raspberry Pi OS. Une copie locale
-de DejaVu Sans, accompagnée de sa licence dans `assets/fonts/`, garantit le
-rendu des accents français si ces polices système sont absentes.
+`/health` n’expose pas le token.
 
 ## Installation
-
-À la racine du projet, activer l'environnement virtuel existant et installer
-les dépendances :
 
 ```bash
 source .venv/bin/activate
@@ -112,22 +147,17 @@ source .venv/bin/activate
 python app.py
 ```
 
-Le serveur écoute sur toutes les interfaces réseau, au port `5050`.
+## Routes
 
-## URL de test
+- Page d’accueil : `http://localhost:5050/`
+- `http://localhost:5050/dashboard.png`
+- `http://localhost:5050/dashboard.bin`
+- `http://localhost:5050/dashboard-spectra6.png`
+- `http://localhost:5050/health`
 
-- Page d'accueil : http://localhost:5050/
-- Image couleur originale : http://localhost:5050/dashboard.png
-- Binaire pour le firmware : http://localhost:5050/dashboard.bin
-- Aperçu de la conversion : http://localhost:5050/dashboard-spectra6.png
-- État du service : http://localhost:5050/health
+Le port est `5050`.
 
-Depuis un autre appareil du réseau, remplacer `localhost` par l'adresse IP du
-Raspberry Pi. Les dernières versions sont aussi sauvegardées dans
-`output/dashboard.png`, `output/dashboard.bin` et
-`output/dashboard_spectra6.png`.
-
-Vérification rapide depuis le Raspberry Pi :
+## Vérifications rapides
 
 ```bash
 curl -s http://localhost:5050/health
@@ -136,92 +166,23 @@ curl -o /tmp/dashboard.bin http://localhost:5050/dashboard.bin
 wc -c /tmp/dashboard.bin
 ```
 
-La dernière commande doit afficher `384000`. Ouvrir `/dashboard.png` dans un
-navigateur permet de vérifier visuellement la météo principale et les mesures
-distinctes de la section **EXTÉRIEUR**; `/dashboard-spectra6.png` permet de
-vérifier leur lisibilité après conversion.
-
-`/health` conserve l'état général du service et ajoute un objet de ce type :
-
-```json
-{
-  "home_assistant": {
-    "configured": true,
-    "last_fetch_ok": true,
-    "source": "live",
-    "entities": {
-      "temperature": "sensor.bme280_temperature",
-      "humidity": "sensor.bme280_humidity",
-      "pressure": "sensor.bme280_pressure"
-    }
-  },
-  "weather": {
-    "configured": true,
-    "entity_id": "weather.forecast_maison",
-    "last_fetch_ok": true,
-    "source": "live",
-    "condition_raw": "cloudy",
-    "condition_fr": "Nuageux"
-  }
-}
-```
-
-Pour les deux diagnostics, `source` vaut `live`, `cache` ou `fallback`. Le
-jeton n'est jamais retourné. `/health` reflète la dernière tentative effectuée
-par une route de rendu; il ne déclenche pas lui-même de requête vers Home
-Assistant.
-
-## Format binaire Spectra 6
-
-La route `GET /dashboard.bin` repart directement de la même image RGB originale
-que `/dashboard.png`; elle ne reconvertit jamais un PNG déjà tramé. La réponse
-utilise le type `application/octet-stream` et contient exactement 384 000
-octets, soit un octet par pixel, parcouru de gauche à droite puis de haut en
-bas. Les index sont :
-
-- `0` : noir
-- `1` : blanc
-- `2` : rouge
-- `3` : jaune
-- `4` : vert
-- `5` : bleu
-
-La conversion hybride applique Floyd–Steinberg avec 40 % de diffusion et la
-palette complète sur le fond illustré. Deux zones sont protégées et converties
-depuis leurs pixels RGB originaux par luminance, avec un seuil initial de 180,
-sans tramage et uniquement en noir ou blanc :
-
-- carte météo : `x = 500..779`, `y = 40..319`;
-- bande inférieure : `x = 0..799`, `y = 360..479`.
-
-Aucune erreur de diffusion ne peut entrer dans ces zones ni en sortir. La route
-`GET /dashboard-spectra6.png` expose l'aperçu RGB 800 × 480 correspondant pour
-une vérification rapide dans un navigateur. Les trois réponses de tableau de
-bord désactivent le cache HTTP.
-
-## Tests automatisés
+## Tests
 
 ```bash
 source .venv/bin/activate
 pytest
 ```
 
-Les appels HTTP Home Assistant sont simulés dans les tests : leur exécution ne
-nécessite ni serveur Home Assistant ni vrai jeton. La suite vérifie aussi que
-`/dashboard.png` reste disponible, que `/dashboard.bin` contient exactement
-384 000 octets et que `/health` n'expose aucun secret.
+Les tests vérifient :
 
-## Ce qui reste fictif ou non intégré
+- récupération Home Assistant (BME280, météo et Environnement Canada),
+- gestion des valeurs manquantes ou non numériques,
+- fallback cache,
+- rendus `dashboard.png` / `dashboard.bin` / `dashboard-spectra6.png`,
+- présence d’un bandeau d’alerte seulement si actif,
+- absence du token dans les sorties publiques.
 
-Après la phase 1.6B, la météo actuelle principale provient de
-`weather.forecast_maison` et la section **EXTÉRIEUR** provient toujours du
-BME280. Restent fictifs ou volontairement absents :
+## Ce qui reste fictif après 1.6C
 
-- les températures minimale et maximale et les prévisions détaillées;
-- les alertes météo et toute intégration MGM supplémentaire;
-- la prochaine activité MGM et les participants;
-- les données de diagnostic Wi-Fi, l'heure de mise à jour et l'état affiché;
-- toute donnée Outlook ou Chronogolf.
-
-Cette phase ne modifie ni les projets firmware, ni les arrière-plans, ni la
-logique Spectra 6 côté EE04.
+- Les champs Outlook / Chronogolf / logique MG M.
+- Les données de diagnostic Wi‑Fi, heure de mise à jour et statut réseau.

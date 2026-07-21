@@ -1,5 +1,7 @@
 """Tests des routes et du rendu du serveur EE04 Home Dashboard."""
 
+from __future__ import annotations
+
 import sys
 from io import BytesIO
 from pathlib import Path
@@ -11,7 +13,7 @@ RACINE_PROJET = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RACINE_PROJET))
 
 import app as app_module
-from dashboard_renderer import render_dashboard
+from dashboard_renderer import ALERT_BANNER_BACKGROUND, render_dashboard
 from spectra6_converter import IMAGE_SIZE, convert_hybrid, is_protected_pixel
 
 
@@ -26,6 +28,23 @@ class FakeHomeAssistantClient:
             "temperature": {"value": None, "unit": "°C", "ok": False},
             "humidity": {"value": None, "unit": "%", "ok": False},
             "pressure": {"value": None, "unit": "hPa", "ok": False},
+            "source": "fallback",
+            "error": "simulation hors ligne",
+        }
+
+    def get_environment_canada_data(self) -> dict:
+        return {
+            "condition": {"value": "Données indisponibles", "ok": False},
+            "temperature": {"value": None, "unit": "°C", "ok": False},
+            "humidity": {"value": None, "unit": "%", "ok": False},
+            "pressure": {"value": None, "unit": "hPa", "ok": False},
+            "wind_direction_text": {"value": None, "ok": False},
+            "wind_speed": {"value": None, "unit": "km/h", "ok": False},
+            "precip_probability": {"value": None, "unit": "%", "ok": False},
+            "high_temp": {"value": None, "unit": "°C", "ok": False},
+            "low_temp": {"value": None, "unit": "°C", "ok": False},
+            "summary": {"value": None, "ok": False},
+            "alerts": {"alerts": 0, "advisories": 0, "watches": 0, "bulletins": 0, "active": False, "text": None},
             "source": "fallback",
             "error": "simulation hors ligne",
         }
@@ -63,6 +82,17 @@ class FakeHomeAssistantClient:
             "condition_fr": "Données indisponibles",
         }
 
+    def environment_canada_health_status(self) -> dict:
+        return {
+            "configured": False,
+            "last_fetch_ok": False,
+            "source": "fallback",
+            "condition": "Données indisponibles",
+            "alert_active": False,
+            "alert_text": None,
+            "entities": {},
+        }
+
 
 @pytest.fixture(autouse=True)
 def isolate_home_assistant(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -79,11 +109,13 @@ def test_health_returns_ok() -> None:
     with app.test_client() as client:
         response = client.get("/health")
 
+    payload = response.get_json()
     assert response.status_code == 200
-    assert response.get_json()["status"] == "ok"
-    assert response.get_json()["binary_size"] == 384000
-    assert response.get_json()["home_assistant"]["source"] == "fallback"
-    assert response.get_json()["weather"]["source"] == "fallback"
+    assert payload["status"] == "ok"
+    assert payload["binary_size"] == 384000
+    assert payload["home_assistant"]["source"] == "fallback"
+    assert payload["weather"]["source"] == "fallback"
+    assert payload["environment_canada"]["source"] == "fallback"
     assert "token" not in response.get_data(as_text=True).lower()
 
 
@@ -156,3 +188,53 @@ def test_renderer_works_without_background(tmp_path: Path) -> None:
 
     assert image.mode == "RGB"
     assert image.size == (800, 480)
+
+
+def test_environment_alert_banner_is_hidden_when_inactive(tmp_path: Path) -> None:
+    """Aucune alerte active ne doit afficher le bandeau rouge."""
+
+    image = render_dashboard(
+        background_path=tmp_path / "background_absent.png",
+        weather_data={
+            "condition": {"value": "Nuageux", "ok": True},
+            "temperature": {"value": 20.0, "unit": "°C", "ok": True},
+            "humidity": {"value": 60, "unit": "%", "ok": True},
+            "pressure": {"value": 1010, "unit": "hPa", "ok": True},
+            "wind_direction_text": {"value": "OSO", "ok": True},
+            "wind_speed": {"value": 9, "unit": "km/h", "ok": True},
+            "precip_probability": {"value": 10, "unit": "%", "ok": True},
+            "high_temp": {"value": 23, "unit": "°C", "ok": True},
+            "low_temp": {"value": 12, "unit": "°C", "ok": True},
+            "summary": {"value": "", "ok": True},
+            "alerts": {"alerts": 0, "advisories": 0, "watches": 0, "bulletins": 0, "active": False, "text": None},
+            "source": "home_assistant_environment_canada",
+            "error": None,
+        },
+    )
+
+    assert image.getpixel((5, 5)) != ALERT_BANNER_BACKGROUND
+
+
+def test_environment_alert_banner_is_visible_when_active(tmp_path: Path) -> None:
+    """Un compteur d'alerte actif doit afficher un bandeau rouge unique."""
+
+    image = render_dashboard(
+        background_path=tmp_path / "background_absent.png",
+        weather_data={
+            "condition": {"value": "Pluvieux", "ok": True},
+            "temperature": {"value": 20.0, "unit": "°C", "ok": True},
+            "humidity": {"value": 60, "unit": "%", "ok": True},
+            "pressure": {"value": 1010, "unit": "hPa", "ok": True},
+            "wind_direction_text": {"value": "OSO", "ok": True},
+            "wind_speed": {"value": 9, "unit": "km/h", "ok": True},
+            "precip_probability": {"value": 10, "unit": "%", "ok": True},
+            "high_temp": {"value": 23, "unit": "°C", "ok": True},
+            "low_temp": {"value": 12, "unit": "°C", "ok": True},
+            "summary": {"value": "", "ok": True},
+            "alerts": {"alerts": 0, "advisories": 1, "watches": 0, "bulletins": 0, "active": True, "text": "1 avis"},
+            "source": "home_assistant_environment_canada",
+            "error": None,
+        },
+    )
+
+    assert image.getpixel((5, 5)) == ALERT_BANNER_BACKGROUND

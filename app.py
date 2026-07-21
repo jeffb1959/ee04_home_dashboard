@@ -39,7 +39,7 @@ def _render_source_image() -> Image.Image:
     """Génère et valide l'unique image RGB source d'une requête."""
 
     bme280_data = home_assistant_client.get_bme280_data()
-    weather_data = home_assistant_client.get_weather_data()
+    weather_data = home_assistant_client.get_environment_canada_data()
     image = render_dashboard(
         bme280_data=bme280_data,
         weather_data=weather_data,
@@ -181,11 +181,12 @@ def health() -> Response:
     return jsonify(
         status="ok",
         service="ee04_home_dashboard",
-        phase="1.6B",
+        phase="1.6C",
         binary_format="spectra6-indexed-1-byte-per-pixel",
         binary_size=BINARY_SIZE,
         home_assistant=home_assistant_client.health_status(),
         weather=home_assistant_client.weather_health_status(),
+        environment_canada=home_assistant_client.environment_canada_health_status(),
     )
 
 

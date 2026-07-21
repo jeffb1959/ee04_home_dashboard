@@ -53,6 +53,21 @@ class HomeAssistantConfig:
     humidity_entity: str
     pressure_entity: str
     weather_entity: str = ""
+    ec_weather_entity: str = ""
+    ec_condition_entity: str = ""
+    ec_temperature_entity: str = ""
+    ec_humidity_entity: str = ""
+    ec_pressure_entity: str = ""
+    ec_wind_direction_text_entity: str = ""
+    ec_wind_speed_entity: str = ""
+    ec_precip_probability_entity: str = ""
+    ec_high_temp_entity: str = ""
+    ec_low_temp_entity: str = ""
+    ec_summary_entity: str = ""
+    ec_alerts_entity: str = ""
+    ec_advisories_entity: str = ""
+    ec_watches_entity: str = ""
+    ec_bulletins_entity: str = ""
 
     @property
     def configured(self) -> bool:
@@ -79,10 +94,58 @@ class HomeAssistantConfig:
         }
 
     @property
+    def environment_canada_entities(self) -> dict[str, str]:
+        """Retourne les identifiants Environnement Canada utilisés par le client."""
+
+        return {
+            "weather": self.ec_weather_entity,
+            "condition": self.ec_condition_entity,
+            "temperature": self.ec_temperature_entity,
+            "humidity": self.ec_humidity_entity,
+            "pressure": self.ec_pressure_entity,
+            "wind_direction_text": self.ec_wind_direction_text_entity,
+            "wind_speed": self.ec_wind_speed_entity,
+            "precip_probability": self.ec_precip_probability_entity,
+            "high_temp": self.ec_high_temp_entity,
+            "low_temp": self.ec_low_temp_entity,
+            "summary": self.ec_summary_entity,
+            "alerts": self.ec_alerts_entity,
+            "advisories": self.ec_advisories_entity,
+            "watches": self.ec_watches_entity,
+            "bulletins": self.ec_bulletins_entity,
+        }
+
+    @property
     def weather_configured(self) -> bool:
         """Indique si la source météo principale peut être interrogée."""
 
         return bool(self.url and self.token and self.weather_entity)
+
+    @property
+    def environment_canada_configured(self) -> bool:
+        """Indique si la source Environnement Canada peut être interrogée."""
+
+        return all(
+            (
+                self.url,
+                self.token,
+                self.ec_weather_entity,
+                self.ec_condition_entity,
+                self.ec_temperature_entity,
+                self.ec_humidity_entity,
+                self.ec_pressure_entity,
+                self.ec_wind_direction_text_entity,
+                self.ec_wind_speed_entity,
+                self.ec_precip_probability_entity,
+                self.ec_high_temp_entity,
+                self.ec_low_temp_entity,
+                self.ec_summary_entity,
+                self.ec_alerts_entity,
+                self.ec_advisories_entity,
+                self.ec_watches_entity,
+                self.ec_bulletins_entity,
+            )
+        )
 
 
 def load_home_assistant_config(
@@ -104,4 +167,19 @@ def load_home_assistant_config(
         humidity_entity=get_value("HA_ENTITY_HUMIDITY"),
         pressure_entity=get_value("HA_ENTITY_PRESSURE"),
         weather_entity=get_value("HA_ENTITY_WEATHER"),
+        ec_weather_entity=get_value("HA_EC_WEATHER_ENTITY"),
+        ec_condition_entity=get_value("HA_EC_CONDITION"),
+        ec_temperature_entity=get_value("HA_EC_TEMPERATURE"),
+        ec_humidity_entity=get_value("HA_EC_HUMIDITY"),
+        ec_pressure_entity=get_value("HA_EC_PRESSURE"),
+        ec_wind_direction_text_entity=get_value("HA_EC_WIND_DIRECTION_TEXT"),
+        ec_wind_speed_entity=get_value("HA_EC_WIND_SPEED"),
+        ec_precip_probability_entity=get_value("HA_EC_PRECIP_PROBABILITY"),
+        ec_high_temp_entity=get_value("HA_EC_HIGH_TEMP"),
+        ec_low_temp_entity=get_value("HA_EC_LOW_TEMP"),
+        ec_summary_entity=get_value("HA_EC_SUMMARY"),
+        ec_alerts_entity=get_value("HA_EC_ALERTS"),
+        ec_advisories_entity=get_value("HA_EC_ADVISORIES"),
+        ec_watches_entity=get_value("HA_EC_WATCHES"),
+        ec_bulletins_entity=get_value("HA_EC_BULLETINS"),
     )
