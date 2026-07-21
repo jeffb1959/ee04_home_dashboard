@@ -131,12 +131,16 @@ def _compose_canvas(background: Image.Image) -> Image.Image:
 
 def _add_weather_panel(image: Image.Image) -> Image.Image:
     """Ajoute un panneau météo léger dans la partie illustrée."""
+    card_x = 485
+    card_y = 30
+    card_width = 300
+    card_height = 300
 
     overlay = Image.new("RGBA", IMAGE_SIZE, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
     draw.rounded_rectangle(
-        (482, 30, 784, 324),
+        (card_x, card_y, card_x + card_width - 1, card_y + card_height - 1),
         radius=16,
         fill=WEATHER_PANEL_FILL,
         outline=PANEL_OUTLINE,
@@ -346,84 +350,96 @@ def _draw_weather(
     humidity, humidity_unit = _format_measurement(bme280_data, "humidity")
     pressure, pressure_unit = _format_measurement(bme280_data, "pressure")
 
+    card_x = 485
+    card_y = 30
+    card_width = 300
+    card_height = 300
+    content_x = card_x + 14
+    content_right = card_x + card_width - 12
+    content_width = content_right - content_x
+
+    section_title_font = load_font(14, bold=True)
+    main_title = "CONDITIONS ACTUELLES"
+    section_title_y = card_y + 14
     draw.text(
-        (514, 44),
-        "CONDITIONS ACTUELLES",
-        font=load_font(14, bold=True),
+        (content_x, section_title_y),
+        main_title,
+        font=section_title_font,
         fill=MUTED_TEXT_COLOR,
     )
-    weather_temperature_font = load_font(42, bold=True)
-    draw.text(
-        (514, 54),
+    section_title_bbox = draw.textbbox((content_x, section_title_y), main_title, font=section_title_font)
+
+    main_temp_text, main_temp_font = _fit_single_line_text(
+        draw,
         f"{weather_temperature} {weather_temperature_unit}".rstrip(),
-        font=weather_temperature_font,
-        fill=TEXT_COLOR,
+        max_width=content_width,
+        min_size=42,
+        max_size=56,
     )
-    condition, condition_font = _fit_weather_condition(draw, condition)
-    weather_temperature_bbox = draw.textbbox(
-        (514, 54),
-        f"{weather_temperature} {weather_temperature_unit}".rstrip(),
-        font=weather_temperature_font,
-    )
-    condition_y = weather_temperature_bbox[3] + 12
-    draw.text(
-        (514, condition_y),
+    main_temp_y = section_title_bbox[3] + 8
+    draw.text((content_x, main_temp_y), main_temp_text, font=main_temp_font, fill=TEXT_COLOR)
+    main_temp_bbox = draw.textbbox((content_x, main_temp_y), main_temp_text, font=main_temp_font)
+
+    condition, condition_font = _fit_weather_condition(
+        draw,
         condition,
-        font=condition_font,
-        fill=TEXT_COLOR,
+        max_width=content_width,
     )
-    draw.text(
-        (514, 164),
+    condition_y = main_temp_bbox[3] + 8
+    draw.text((content_x, condition_y), condition, font=condition_font, fill=TEXT_COLOR)
+    condition_bbox = draw.textbbox((content_x, condition_y), condition, font=condition_font)
+
+    detail_font = load_font(13)
+    detail_y = condition_bbox[3] + 10
+    weather_lines = (
         f"Pluie : {weather_precip} {weather_precip_unit}".rstrip(),
-        font=load_font(14),
-        fill=MUTED_TEXT_COLOR,
-    )
-    draw.text(
-        (514, 180),
         f"Min. {weather_low_temp} {weather_temp_unit} • Max. {weather_high_temp} {weather_temp_unit}"
         .replace("  ", " ")
         .rstrip(),
-        font=load_font(14),
-        fill=MUTED_TEXT_COLOR,
-    )
-    draw.text(
-        (514, 196),
         f"Humidité : {weather_humidity} {weather_humidity_unit}".rstrip(),
-        font=load_font(14),
-        fill=MUTED_TEXT_COLOR,
-    )
-    draw.text(
-        (514, 212),
         f"Pression : {weather_pressure} {weather_pressure_unit}".rstrip(),
-        font=load_font(14),
-        fill=MUTED_TEXT_COLOR,
-    )
-    draw.text(
-        (514, 228),
         f"Vent : {weather_wind_direction} {weather_wind_speed} {weather_wind_unit}".rstrip(),
-        font=load_font(14),
-        fill=MUTED_TEXT_COLOR,
     )
-    draw.line((514, 244, 746, 244), fill=(177, 132, 79), width=1)
+    for line in weather_lines:
+        draw.text((content_x, detail_y), line, font=detail_font, fill=MUTED_TEXT_COLOR)
+        detail_y += 16
 
+    separator_y = min(card_y + card_height - 73, detail_y + 4)
+    draw.line((content_x, separator_y, content_right, separator_y), fill=(177, 132, 79), width=1)
+
+    sensor_title = "CAPTEUR EXTÉRIEUR"
+    sensor_title_y = separator_y + 8
     draw.text(
-        (514, 254),
-        "CAPTEUR EXTÉRIEUR",
+        (content_x, sensor_title_y),
+        sensor_title,
         font=load_font(13, bold=True),
         fill=MUTED_TEXT_COLOR,
     )
-    draw.text(
-        (514, 264),
-        f"{temperature} {temperature_unit}",
-        font=load_font(23, bold=True),
-        fill=TEXT_COLOR,
+    sensor_title_bbox = draw.textbbox((content_x, sensor_title_y), sensor_title, font=load_font(13, bold=True))
+    sensor_temp_text = f"{temperature} {temperature_unit}".rstrip()
+    sensor_temp_text, sensor_temp_font = _fit_single_line_text(
+        draw,
+        sensor_temp_text,
+        max_width=content_width,
+        min_size=28,
+        max_size=34,
     )
-    draw.text(
-        (514, 290),
-        f"Hum. {humidity} {humidity_unit}   Pre. {pressure} {pressure_unit}",
-        font=load_font(14),
-        fill=TEXT_COLOR,
+    sensor_temp_y = sensor_title_bbox[3] + 4
+    draw.text((content_x, sensor_temp_y), sensor_temp_text, font=sensor_temp_font, fill=TEXT_COLOR)
+    compact_sensor_text = f"Hum. {humidity} {humidity_unit}   Pre. {pressure} {pressure_unit}"
+    compact_sensor_text, compact_sensor_font = _fit_single_line_text(
+        draw,
+        compact_sensor_text,
+        max_width=content_width,
+        min_size=11,
+        max_size=13,
     )
+    compact_sensor_y = draw.textbbox(
+        (content_x, sensor_temp_y),
+        sensor_temp_text,
+        font=sensor_temp_font,
+    )[3] + 6
+    draw.text((content_x, compact_sensor_y), compact_sensor_text, font=compact_sensor_font, fill=TEXT_COLOR)
 
 
 def _draw_mgm(draw: ImageDraw.ImageDraw) -> None:
