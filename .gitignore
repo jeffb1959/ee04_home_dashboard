@@ -11,6 +11,8 @@ secrets.json
 config.local.json
 
 data/*.json
+# Cache local MSAL (authentification Microsoft Graph)
+data/msal_token_cache.json
 # Dernières lectures BME280 et météo; peuvent refléter des données domestiques.
 data/home_assistant_cache.json
 output/*.png
