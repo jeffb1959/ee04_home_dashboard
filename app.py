@@ -54,6 +54,15 @@ def _parse_screen_rssi(value: str | None) -> int | None:
     return rssi if -120 <= rssi <= 0 else None
 
 
+def _get_screen_rssi() -> int | None:
+    """Lit le RSSI de l'URL, avec le header historique comme repli."""
+
+    raw_rssi = request.args.get("rssi")
+    if raw_rssi is None:
+        raw_rssi = request.headers.get("X-EE04-RSSI")
+    return _parse_screen_rssi(raw_rssi)
+
+
 def _load_mail_updated_at() -> datetime | None:
     """Retourne l'heure de la dernière mise à jour Chronogolf locale."""
 
@@ -165,7 +174,7 @@ def dashboard_png() -> Response | tuple[Response, int]:
     """Génère, sauvegarde et retourne la dernière image du tableau de bord."""
 
     try:
-        image = _render_source_image()
+        image = _render_source_image(screen_rssi=_get_screen_rssi())
         png_data = _encode_png(image)
         _save_atomically(OUTPUT_PNG_FILE, png_data)
 
@@ -185,8 +194,7 @@ def dashboard_binary() -> Response | tuple[Response, int]:
     """Retourne un index Spectra 6 par pixel, dans l'ordre ligne par ligne."""
 
     try:
-        screen_rssi = _parse_screen_rssi(request.headers.get("X-EE04-RSSI"))
-        conversion = _generate_spectra6(screen_rssi=screen_rssi)
+        conversion = _generate_spectra6(screen_rssi=_get_screen_rssi())
         binary_data = conversion.palette_indices
         if len(binary_data) != BINARY_SIZE:
             raise ValueError(f"Le binaire doit mesurer {BINARY_SIZE} octets")
@@ -209,7 +217,7 @@ def dashboard_spectra6_png() -> Response | tuple[Response, int]:
     """Retourne un aperçu navigateur de la conversion hybride Spectra 6."""
 
     try:
-        conversion = _generate_spectra6()
+        conversion = _generate_spectra6(screen_rssi=_get_screen_rssi())
         png_data = _encode_png(conversion.preview)
         _save_atomically(OUTPUT_SPECTRA6_FILE, png_data)
 

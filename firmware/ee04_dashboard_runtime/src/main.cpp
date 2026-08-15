@@ -356,15 +356,18 @@ DownloadResult validateAndStoreDashboard() {
   HTTPClient http;
 
   http.setTimeout(kHttpTimeoutMs);
+  const int requestRssi = WiFi.RSSI();
+  const char* querySeparator = String(kDashboardUrl).indexOf('?') >= 0 ? "&rssi=" : "?rssi=";
+  const String requestUrl = String(kDashboardUrl) + querySeparator + String(requestRssi);
+  Serial.printf("URL dashboard : %s\n", requestUrl.c_str());
   result.failedStep = "debut de requete HTTP";
-  if (!http.begin(client, kDashboardUrl)) {
+  if (!http.begin(client, requestUrl)) {
     result.failedReason = "HTTPClient.begin() a echoue";
     result.durationMs = millis() - startMs;
     return result;
   }
 
   http.setUserAgent(kUserAgent);
-  http.addHeader("X-EE04-RSSI", String(WiFi.RSSI()));
   const char* headerKeys[] = {"Content-Type"};
   http.collectHeaders(headerKeys, 1);
 

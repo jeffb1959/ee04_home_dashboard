@@ -1,4 +1,4 @@
-# Phase 1.5B.2 — telechargement valide puis affichage ePaper
+# Phase 1.5B.2 ï¿½ telechargement valide puis affichage ePaper
 
 ## Objectif
 
@@ -6,7 +6,7 @@ Ajouter l affichage de `/dashboard.bin` sur l ecran ePaper du EE04 avec le flux 
 - telechargement depuis le Raspberry Pi
 - validation binaire strictement `1 octet par pixel`
 - ecriture atomique dans LittleFS
-- affichage uniquement apres validation complete
+- affichage uniquement apres validation complete 2
 
 ## Flux fonctionnel
 

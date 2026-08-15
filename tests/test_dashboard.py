@@ -233,8 +233,25 @@ def test_render_source_image_handles_missing_or_corrupt_mail_cache(
     assert image.size == IMAGE_SIZE
 
 
-def test_dashboard_binary_passes_header_rssi_to_its_generation(
+@pytest.mark.parametrize(
+    ("path", "headers", "expected_rssi"),
+    [
+        ("/dashboard.bin?rssi=-61", {}, -61),
+        ("/dashboard.bin?rssi=invalide", {}, None),
+        ("/dashboard.bin?rssi=-121", {}, None),
+        ("/dashboard.bin", {"X-EE04-RSSI": "-72"}, -72),
+        (
+            "/dashboard.bin?rssi=-61",
+            {"X-EE04-RSSI": "-72"},
+            -61,
+        ),
+    ],
+)
+def test_dashboard_binary_passes_request_rssi_to_its_generation(
     monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    headers: dict[str, str],
+    expected_rssi: int | None,
 ) -> None:
     captured: list[int | None] = []
 
@@ -249,10 +266,29 @@ def test_dashboard_binary_passes_header_rssi_to_its_generation(
     monkeypatch.setattr(app_module, "_generate_spectra6", _fake_generation)
 
     with app.test_client() as client:
-        response = client.get("/dashboard.bin", headers={"X-EE04-RSSI": "-63"})
+        response = client.get(path, headers=headers)
 
     assert response.status_code == 200
-    assert captured == [-63]
+    assert len(response.data) == 384000
+    assert captured == [expected_rssi]
+
+
+def test_dashboard_png_uses_optional_query_rssi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received_rssi: list[int | None] = []
+
+    def _fake_renderer(**kwargs: Any) -> Image.Image:
+        received_rssi.append(kwargs["diagnostics"].screen_rssi)
+        return Image.new("RGB", IMAGE_SIZE)
+
+    monkeypatch.setattr(app_module, "render_dashboard", _fake_renderer)
+
+    with app.test_client() as client:
+        assert client.get("/dashboard.png").status_code == 200
+        assert client.get("/dashboard.png?rssi=-63").status_code == 200
+
+    assert received_rssi == [None, -63]
 
 
 def test_activity_formatting_for_upcoming_activity() -> None:
