@@ -10,10 +10,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from dotenv import load_dotenv
-
-from chronogolf_client import ChronogolfClient, ChronogolfIMAPError, ImapConfigError, ImapConfig, load_imap_config, ENV_FILE
-from reservation_cache import save_reservations_cache, DEFAULT_CACHE_PATH
+from reservation_cache import DEFAULT_CACHE_PATH
+from reservation_refresh import ReservationRefreshResult, refresh_reservation_cache
+from chronogolf_client import ChronogolfClient, ChronogolfIMAPError, ImapConfigError, ImapConfig
 
 
 def _human_count_label(count: int) -> str:
@@ -25,29 +24,22 @@ def _human_count_label(count: int) -> str:
 def refresh_reservations(
     *,
     now: datetime | None = None,
-    cache_path=DEFAULT_CACHE_PATH,
+    cache_path: Path | str = DEFAULT_CACHE_PATH,
     client_factory=ChronogolfClient,
     config: ImapConfig | None = None,
 ) -> int:
     """Rafraîchit le cache local des réservations Chronogolf."""
 
-    now = now or datetime.now()
     try:
-        if config is None:
-            load_dotenv(ENV_FILE)
-            config = load_imap_config()
-
-        print("Connexion Chronogolf réussie.")
-        client = client_factory(config)
-        reservations = client.get_upcoming_reservations(reference=now, today=now.date())
-
-        save_reservations_cache(
-            reservations,
-            updated_at=now,
+        result: ReservationRefreshResult = refresh_reservation_cache(
+            now=now,
             cache_path=cache_path,
+            client_factory=client_factory,
+            config=config,
         )
 
-        print(_human_count_label(len(reservations)))
+        print("Connexion Chronogolf réussie.")
+        print(_human_count_label(result.reservations_count))
         print(f"Cache mis à jour : {cache_path}")
         return 0
     except (ChronogolfIMAPError, ImapConfigError):

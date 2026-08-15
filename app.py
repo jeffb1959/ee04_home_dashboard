@@ -6,14 +6,16 @@ import io
 import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+import hmac
 
-from flask import Flask, Response, jsonify, send_file, url_for
+from flask import Flask, Response, jsonify, send_file, url_for, request
 from PIL import Image
 
-from config import load_home_assistant_config
+from config import load_home_assistant_config, load_refresh_token
 from dashboard_renderer import render_dashboard
 from home_assistant_client import HomeAssistantClient
 from spectra6_converter import BINARY_SIZE, ConversionResult, IMAGE_SIZE, convert_hybrid
+from reservation_refresh import ReservationRefreshResult, refresh_reservation_cache
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -86,6 +88,20 @@ def _generate_spectra6() -> ConversionResult:
 
     source_image = _render_source_image()
     return convert_hybrid(source_image)
+
+
+def _extract_bearer_token(header_value: str | None) -> str | None:
+    """Extrait un jeton Bearer si le format est valide."""
+
+    if not header_value:
+        return None
+
+    prefix = "Bearer "
+    if not header_value.startswith(prefix):
+        return None
+
+    token = header_value[len(prefix) :].strip()
+    return token or None
 
 
 @app.get("/")
@@ -187,6 +203,49 @@ def health() -> Response:
         home_assistant=home_assistant_client.health_status(),
         weather=home_assistant_client.weather_health_status(),
         environment_canada=home_assistant_client.environment_canada_health_status(),
+    )
+
+
+@app.post("/api/reservations/refresh")
+def api_refresh_reservations() -> Response:
+    """Déclenche un rafraîchissement HTTP de façon sécurisée."""
+
+    configured_token = load_refresh_token()
+    if not configured_token:
+        return (
+            jsonify(
+                status="error",
+                error="refresh_not_configured",
+            ),
+            503,
+        )
+
+    request_token = _extract_bearer_token(request.headers.get("Authorization"))
+    if request_token is None or not hmac.compare_digest(request_token, configured_token):
+        return (
+            jsonify(
+                status="error",
+                error="unauthorized",
+            ),
+            401,
+        )
+
+    try:
+        refresh_result: ReservationRefreshResult = refresh_reservation_cache()
+    except Exception:
+        app.logger.exception("Échec du rafraîchissement Chronogolf.")
+        return (
+            jsonify(
+                status="error",
+                error="refresh_failed",
+            ),
+            503,
+        )
+
+    return jsonify(
+        status="ok",
+        reservations=refresh_result.reservations_count,
+        updated_at=refresh_result.updated_at.isoformat(timespec="seconds"),
     )
 
 

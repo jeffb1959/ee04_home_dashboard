@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import sys
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 import pytest
 from PIL import Image
@@ -238,3 +240,140 @@ def test_environment_alert_banner_is_visible_when_active(tmp_path: Path) -> None
     )
 
     assert image.getpixel((5, 5)) == ALERT_BANNER_BACKGROUND
+
+
+def test_refresh_route_without_authorization_returns_401(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app_module, "load_refresh_token", lambda: "TOKEN_OK")
+
+    with app.test_client() as client:
+        response = client.post("/api/reservations/refresh")
+
+    assert response.status_code == 401
+    payload = response.get_json()
+    assert payload == {"status": "error", "error": "unauthorized"}
+
+
+def test_refresh_route_with_wrong_token_returns_401(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app_module, "load_refresh_token", lambda: "TOKEN_OK")
+
+    with app.test_client() as client:
+        response = client.post(
+            "/api/reservations/refresh",
+            headers={"Authorization": "Bearer TOKEN_WRONG"},
+        )
+
+    assert response.status_code == 401
+    assert response.get_json() == {"status": "error", "error": "unauthorized"}
+
+
+def test_refresh_route_with_valid_token_returns_ok_and_no_sensitive_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app_module, "load_refresh_token", lambda: "TOKEN_OK")
+
+    def _fake_refresh() -> Any:
+        return app_module.ReservationRefreshResult(
+            reservations_count=2,
+            updated_at=datetime(2026, 8, 14, 22, 30, 0),
+        )
+
+    monkeypatch.setattr(app_module, "refresh_reservation_cache", _fake_refresh)
+
+    with app.test_client() as client:
+        response = client.post(
+            "/api/reservations/refresh",
+            headers={"Authorization": "Bearer TOKEN_OK"},
+        )
+
+    payload = response.get_json()
+    assert response.status_code == 200
+    assert payload["status"] == "ok"
+    assert payload["reservations"] == 2
+    assert payload["updated_at"] == "2026-08-14T22:30:00"
+    assert "joueurs" not in payload
+    assert "reservation_id" not in payload
+
+
+def test_refresh_route_without_configured_token_returns_503(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app_module, "load_refresh_token", lambda: None)
+
+    with app.test_client() as client:
+        response = client.post(
+            "/api/reservations/refresh",
+            headers={"Authorization": "Bearer ANY"},
+        )
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "status": "error",
+        "error": "refresh_not_configured",
+    }
+
+
+def test_refresh_route_error_returns_503_and_does_not_log_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app_module, "load_refresh_token", lambda: "TOKEN_OK")
+
+    def _failing_refresh() -> Any:
+        raise Exception("failure including token TOKEN_OK")
+
+    logs: list[str] = []
+
+    def _fake_exception(message: str, *args: Any, **kwargs: Any) -> None:
+        logs.append(message)
+
+    monkeypatch.setattr(app_module.app.logger, "exception", _fake_exception)
+    monkeypatch.setattr(app_module, "refresh_reservation_cache", _failing_refresh)
+
+    with app.test_client() as client:
+        response = client.post(
+            "/api/reservations/refresh",
+            headers={"Authorization": "Bearer TOKEN_OK"},
+        )
+
+    assert response.status_code == 503
+    assert response.get_json() == {"status": "error", "error": "refresh_failed"}
+    assert logs
+    assert "TOKEN_OK" not in "".join(logs)
+
+
+def test_refresh_route_rejects_get_with_405() -> None:
+    with app.test_client() as client:
+        response = client.get("/api/reservations/refresh")
+
+    assert response.status_code == 405
+
+
+def test_health_never_returns_refresh_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app_module, "load_refresh_token", lambda: "TOKEN_OK")
+
+    with app.test_client() as client:
+        response = client.get("/health")
+
+    body = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert "TOKEN_OK" not in body
+
+
+def test_non_refresh_routes_do_not_trigger_chronogolf_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app_module, "load_refresh_token", lambda: "TOKEN_OK")
+
+    refresh_called = 0
+
+    def _forbidden_refresh() -> Any:
+        nonlocal refresh_called
+        refresh_called += 1
+        raise AssertionError("refresh route should not be called")
+
+    monkeypatch.setattr(app_module, "refresh_reservation_cache", _forbidden_refresh)
+
+    with app.test_client() as client:
+        assert client.get("/").status_code == 200
+        assert client.get("/dashboard.png").status_code == 200
+        assert client.get("/dashboard.bin").status_code == 200
+        assert client.get("/dashboard-spectra6.png").status_code == 200
+
+    assert refresh_called == 0

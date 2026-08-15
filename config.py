@@ -183,3 +183,19 @@ def load_home_assistant_config(
         ec_watches_entity=get_value("HA_EC_WATCHES"),
         ec_bulletins_entity=get_value("HA_EC_BULLETINS"),
     )
+
+
+def load_refresh_token(
+    env_file: str | Path = DEFAULT_ENV_FILE,
+    environ: Mapping[str, str] | None = None,
+) -> str | None:
+    """Charge le jeton HTTP de rafraîchissement depuis l'environnement puis `.env`."""
+
+    file_values = _read_env_file(Path(env_file))
+    process_values = os.environ if environ is None else environ
+
+    token = process_values.get("EE04_REFRESH_TOKEN", "").strip()
+    if not token:
+        token = file_values.get("EE04_REFRESH_TOKEN", "").strip()
+
+    return token or None
