@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import time
 from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps, UnidentifiedImageError
+
+from activity_service import ActivityInfo
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -25,6 +28,30 @@ SEPARATOR_COLOR = (177, 132, 79)
 ALERT_BANNER_BACKGROUND = (204, 24, 34)
 ALERT_BANNER_TEXT_LIGHT = (255, 255, 255)
 ALERT_BANNER_TEXT_DARK = (20, 20, 20)
+
+FRENCH_WEEKDAYS = (
+    "lundi",
+    "mardi",
+    "mercredi",
+    "jeudi",
+    "vendredi",
+    "samedi",
+    "dimanche",
+)
+FRENCH_MONTHS = (
+    "janvier",
+    "février",
+    "mars",
+    "avril",
+    "mai",
+    "juin",
+    "juillet",
+    "août",
+    "septembre",
+    "octobre",
+    "novembre",
+    "décembre",
+)
 
 
 def load_font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -276,13 +303,8 @@ def _fit_single_line_text(
         font = load_font(size, bold=True)
         if draw.textlength(text, font=font) <= max_width:
             return text, font
-        trimmed = text
-        while trimmed and draw.textlength(f"{trimmed}…", font=font) > max_width:
-            trimmed = trimmed[:-1]
-        if trimmed:
-            return f"{trimmed.rstrip()}…", font
 
-    font = load_font(min_size)
+    font = load_font(min_size, bold=True)
     trimmed = text
     while trimmed and draw.textlength(f"{trimmed}…", font=font) > max_width:
         trimmed = trimmed[:-1]
@@ -442,8 +464,62 @@ def _draw_weather(
     draw.text((content_x, compact_sensor_y), compact_sensor_text, font=compact_sensor_font, fill=TEXT_COLOR)
 
 
-def _draw_mgm(draw: ImageDraw.ImageDraw) -> None:
-    """Dessine la prochaine activité MGM fictive dans la bande inférieure."""
+def _format_activity_time(activity_time: time) -> str:
+    """Formate une heure d'activité sans dépendre de la locale système."""
+
+    return f"{activity_time.hour} h {activity_time.minute:02d}"
+
+
+def _format_activity_datetime(activity: ActivityInfo) -> str:
+    """Formate la date d'activité selon son état déjà déterminé par le service."""
+
+    if activity.heure is None:
+        return ""
+
+    formatted_time = _format_activity_time(activity.heure)
+    if activity.status == "today":
+        return f"Aujourd'hui à {formatted_time}"
+    if activity.status != "upcoming" or activity.date is None:
+        return ""
+
+    weekday = FRENCH_WEEKDAYS[activity.date.weekday()].capitalize()
+    month = FRENCH_MONTHS[activity.date.month - 1]
+    return f"{weekday} {activity.date.day} {month} à {formatted_time}"
+
+
+def _format_activity_player_count(activity: ActivityInfo) -> str:
+    """Retourne le nombre de participants avec l'accord approprié."""
+
+    count = len(activity.participants)
+    return f"{count} joueur" if count == 1 else f"{count} joueurs"
+
+
+def _format_activity_participants(activity: ActivityInfo) -> str:
+    """Préserve les participants fournis par le service, dans leur ordre."""
+
+    return " • ".join(activity.participants)
+
+
+def _format_activity_lines(activity: ActivityInfo | None) -> tuple[str, ...]:
+    """Produit uniquement les lignes publiques destinées à la bande MGM."""
+
+    if activity is None or activity.status == "unavailable":
+        return ((activity.message if activity and activity.message else "Départs indisponibles."),)
+    if activity.status == "none":
+        return (activity.message or "Aucun départ cette semaine.",)
+
+    datetime_line = _format_activity_datetime(activity)
+    if not datetime_line:
+        return ("Départs indisponibles.",)
+    return (
+        datetime_line,
+        _format_activity_player_count(activity),
+        _format_activity_participants(activity),
+    )
+
+
+def _draw_mgm(draw: ImageDraw.ImageDraw, activity: ActivityInfo | None) -> None:
+    """Dessine l'activité MGM fournie par le service dans la bande inférieure."""
 
     draw.text(
         (24, 368),
@@ -451,24 +527,21 @@ def _draw_mgm(draw: ImageDraw.ImageDraw) -> None:
         font=load_font(11, bold=True),
         fill=MUTED_TEXT_COLOR,
     )
-    draw.text(
-        (24, 385),
-        "Mercredi 22 juillet à 8 h 16",
-        font=load_font(19, bold=True),
-        fill=TEXT_COLOR,
+    lines = _format_activity_lines(activity)
+    if len(lines) == 1:
+        draw.text((24, 385), lines[0], font=load_font(19, bold=True), fill=TEXT_COLOR)
+        return
+
+    draw.text((24, 385), lines[0], font=load_font(19, bold=True), fill=TEXT_COLOR)
+    draw.text((24, 410), lines[1], font=load_font(14, bold=True), fill=TEXT_COLOR)
+    participants, participants_font = _fit_single_line_text(
+        draw,
+        lines[2],
+        max_width=752,
+        min_size=11,
+        max_size=14,
     )
-    draw.text(
-        (24, 410),
-        "Lorette • 4 joueurs",
-        font=load_font(14, bold=True),
-        fill=TEXT_COLOR,
-    )
-    draw.text(
-        (24, 430),
-        "Jean-François • Yvon • Robert • Alain",
-        font=load_font(13),
-        fill=TEXT_COLOR,
-    )
+    draw.text((24, 430), participants, font=participants_font, fill=TEXT_COLOR)
 
 
 def _draw_diagnostics(draw: ImageDraw.ImageDraw) -> None:
@@ -487,6 +560,7 @@ def render_dashboard(
     background_path: str | Path = DEFAULT_BACKGROUND_PATH,
     bme280_data: Mapping[str, Any] | None = None,
     weather_data: Mapping[str, Any] | None = None,
+    activity: ActivityInfo | None = None,
 ) -> Image.Image:
     """Produit l'image complète du tableau de bord au format RGB 800 x 480."""
 
@@ -497,6 +571,6 @@ def render_dashboard(
 
     draw = ImageDraw.Draw(image)
     _draw_weather(draw, bme280_data, weather_data)
-    _draw_mgm(draw)
+    _draw_mgm(draw, activity)
     _draw_diagnostics(draw)
     return image

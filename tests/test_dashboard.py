@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, time
 import sys
 from io import BytesIO
 from pathlib import Path
@@ -15,7 +15,15 @@ RACINE_PROJET = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RACINE_PROJET))
 
 import app as app_module
-from dashboard_renderer import ALERT_BANNER_BACKGROUND, render_dashboard
+from activity_service import ActivityInfo
+from dashboard_renderer import (
+    ALERT_BANNER_BACKGROUND,
+    _format_activity_datetime,
+    _format_activity_lines,
+    _format_activity_participants,
+    _format_activity_player_count,
+    render_dashboard,
+)
 from spectra6_converter import IMAGE_SIZE, convert_hybrid, is_protected_pixel
 
 
@@ -133,6 +141,104 @@ def test_dashboard_returns_an_800_by_480_png() -> None:
     with Image.open(BytesIO(response.data)) as image:
         assert image.format == "PNG"
         assert image.size == (800, 480)
+
+
+def test_render_source_image_passes_activity_to_renderer_without_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """La génération lit l'activité préparée sans déclencher Chronogolf."""
+
+    activity = ActivityInfo(
+        status="upcoming",
+        date=date(2026, 8, 17),
+        heure=time(8, 39),
+        participants=["Alice Tremblay"],
+        source_id="TEST-1234",
+    )
+    received: dict[str, Any] = {}
+
+    monkeypatch.setattr(app_module, "get_display_activity", lambda: activity)
+
+    def _fake_renderer(**kwargs: Any) -> Image.Image:
+        received.update(kwargs)
+        return Image.new("RGB", IMAGE_SIZE)
+
+    def _forbidden_refresh() -> None:
+        raise AssertionError("Aucun rafraîchissement Chronogolf pendant le rendu")
+
+    monkeypatch.setattr(app_module, "render_dashboard", _fake_renderer)
+    monkeypatch.setattr(app_module, "refresh_reservation_cache", _forbidden_refresh)
+
+    image = app_module._render_source_image()
+
+    assert image.size == IMAGE_SIZE
+    assert received["activity"] is activity
+
+
+def test_activity_formatting_for_upcoming_activity() -> None:
+    activity = ActivityInfo(
+        status="upcoming",
+        date=date(2026, 8, 17),
+        heure=time(8, 39),
+        participants=["Alice Tremblay", "Bob Martin", "Charles Gagnon"],
+        source_id="TEST-1234",
+    )
+
+    assert _format_activity_datetime(activity) == "Lundi 17 août à 8 h 39"
+    assert _format_activity_player_count(activity) == "3 joueurs"
+    assert _format_activity_participants(activity) == (
+        "Alice Tremblay • Bob Martin • Charles Gagnon"
+    )
+    assert "TEST-1234" not in " ".join(_format_activity_lines(activity))
+
+
+def test_activity_formatting_for_today_and_single_player() -> None:
+    activity = ActivityInfo(
+        status="today",
+        date=date(2026, 8, 17),
+        heure=time(9, 0),
+        participants=["Alice Tremblay"],
+        source_id="TEST-1234",
+    )
+
+    assert _format_activity_datetime(activity) == "Aujourd'hui à 9 h 00"
+    assert _format_activity_player_count(activity) == "1 joueur"
+
+
+@pytest.mark.parametrize(
+    ("activity", "expected_message"),
+    [
+        (
+            ActivityInfo(
+                status="none",
+                date=None,
+                heure=None,
+                participants=[],
+                source_id=None,
+                message="Aucun départ cette semaine.",
+            ),
+            "Aucun départ cette semaine.",
+        ),
+        (
+            ActivityInfo(
+                status="unavailable",
+                date=None,
+                heure=None,
+                participants=[],
+                source_id=None,
+                message="Départs indisponibles.",
+            ),
+            "Départs indisponibles.",
+        ),
+        (None, "Départs indisponibles."),
+    ],
+)
+def test_activity_unavailable_states_have_a_safe_message(
+    activity: ActivityInfo | None,
+    expected_message: str,
+) -> None:
+    assert _format_activity_lines(activity) == (expected_message,)
+    assert render_dashboard(activity=activity).size == IMAGE_SIZE
 
 
 def test_dashboard_binary_has_expected_spectra6_format() -> None:

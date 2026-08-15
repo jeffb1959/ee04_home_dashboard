@@ -12,6 +12,7 @@ from flask import Flask, Response, jsonify, send_file, url_for, request
 from PIL import Image
 
 from config import load_home_assistant_config, load_refresh_token
+from activity_service import get_display_activity
 from dashboard_renderer import render_dashboard
 from home_assistant_client import HomeAssistantClient
 from spectra6_converter import BINARY_SIZE, ConversionResult, IMAGE_SIZE, convert_hybrid
@@ -42,9 +43,11 @@ def _render_source_image() -> Image.Image:
 
     bme280_data = home_assistant_client.get_bme280_data()
     weather_data = home_assistant_client.get_environment_canada_data()
+    activity = get_display_activity()
     image = render_dashboard(
         bme280_data=bme280_data,
         weather_data=weather_data,
+        activity=activity,
     )
     if image.size != IMAGE_SIZE:
         raise ValueError(
