@@ -7,14 +7,16 @@ import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 import hmac
+from datetime import datetime
 
 from flask import Flask, Response, jsonify, send_file, url_for, request
 from PIL import Image
 
 from config import load_home_assistant_config, load_refresh_token
 from activity_service import get_display_activity
-from dashboard_renderer import render_dashboard
+from dashboard_renderer import DashboardDiagnostics, render_dashboard
 from home_assistant_client import HomeAssistantClient
+from reservation_cache import ReservationCacheError, load_reservations_cache
 from spectra6_converter import BINARY_SIZE, ConversionResult, IMAGE_SIZE, convert_hybrid
 from reservation_refresh import ReservationRefreshResult, refresh_reservation_cache
 
@@ -38,16 +40,46 @@ def add_no_cache_headers(response: Response) -> Response:
     return response
 
 
-def _render_source_image() -> Image.Image:
+def _parse_screen_rssi(value: str | None) -> int | None:
+    """Valide le RSSI transmis par l'écran dans une requête HTTP."""
+
+    if value is None:
+        return None
+
+    try:
+        rssi = int(value.strip())
+    except ValueError:
+        return None
+
+    return rssi if -120 <= rssi <= 0 else None
+
+
+def _load_mail_updated_at() -> datetime | None:
+    """Retourne l'heure de la dernière mise à jour Chronogolf locale."""
+
+    try:
+        cache = load_reservations_cache()
+    except ReservationCacheError:
+        return None
+    return cache.updated_at if cache is not None else None
+
+
+def _render_source_image(screen_rssi: int | None = None) -> Image.Image:
     """Génère et valide l'unique image RGB source d'une requête."""
 
     bme280_data = home_assistant_client.get_bme280_data()
     weather_data = home_assistant_client.get_environment_canada_data()
     activity = get_display_activity()
+    diagnostics = DashboardDiagnostics(
+        screen_rssi=screen_rssi,
+        generated_at=datetime.now(),
+        mail_updated_at=_load_mail_updated_at(),
+    )
     image = render_dashboard(
         bme280_data=bme280_data,
         weather_data=weather_data,
         activity=activity,
+        diagnostics=diagnostics,
     )
     if image.size != IMAGE_SIZE:
         raise ValueError(
@@ -86,10 +118,10 @@ def _save_atomically(destination: Path, data: bytes) -> None:
         raise
 
 
-def _generate_spectra6() -> ConversionResult:
+def _generate_spectra6(screen_rssi: int | None = None) -> ConversionResult:
     """Produit la source originale puis sa conversion hybride Spectra 6."""
 
-    source_image = _render_source_image()
+    source_image = _render_source_image(screen_rssi=screen_rssi)
     return convert_hybrid(source_image)
 
 
@@ -153,7 +185,8 @@ def dashboard_binary() -> Response | tuple[Response, int]:
     """Retourne un index Spectra 6 par pixel, dans l'ordre ligne par ligne."""
 
     try:
-        conversion = _generate_spectra6()
+        screen_rssi = _parse_screen_rssi(request.headers.get("X-EE04-RSSI"))
+        conversion = _generate_spectra6(screen_rssi=screen_rssi)
         binary_data = conversion.palette_indices
         if len(binary_data) != BINARY_SIZE:
             raise ValueError(f"Le binaire doit mesurer {BINARY_SIZE} octets")

@@ -364,6 +364,7 @@ DownloadResult validateAndStoreDashboard() {
   }
 
   http.setUserAgent(kUserAgent);
+  http.addHeader("X-EE04-RSSI", String(WiFi.RSSI()));
   const char* headerKeys[] = {"Content-Type"};
   http.collectHeaders(headerKeys, 1);
 

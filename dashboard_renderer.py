@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import time
+from dataclasses import dataclass
+from datetime import datetime, time
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,15 @@ FRENCH_MONTHS = (
     "novembre",
     "décembre",
 )
+
+
+@dataclass(frozen=True)
+class DashboardDiagnostics:
+    """Informations techniques affichables, fournies par la couche Flask."""
+
+    screen_rssi: int | None
+    generated_at: datetime
+    mail_updated_at: datetime | None
 
 
 def load_font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -544,14 +554,43 @@ def _draw_mgm(draw: ImageDraw.ImageDraw, activity: ActivityInfo | None) -> None:
     draw.text((24, 430), participants, font=participants_font, fill=TEXT_COLOR)
 
 
-def _draw_diagnostics(draw: ImageDraw.ImageDraw) -> None:
-    """Dessine la dernière ligne de la bande, réservée au diagnostic."""
+def _format_mail_updated_at(updated_at: datetime | None) -> str:
+    """Formate l'horodatage du cache Chronogolf sans dépendre de la locale."""
+
+    if updated_at is None:
+        return "Courriel indisponible"
+    month = FRENCH_MONTHS[updated_at.month - 1]
+    return f"Courriel {updated_at.day} {month} {updated_at:%H:%M}"
+
+
+def _format_diagnostics(diagnostics: DashboardDiagnostics) -> str:
+    """Construit l'unique ligne de diagnostic à partir de valeurs structurées."""
+
+    rssi = "--" if diagnostics.screen_rssi is None else str(diagnostics.screen_rssi)
+    return (
+        f"Wi-Fi {rssi} dBm  •  MAJ {diagnostics.generated_at:%H:%M}  •  "
+        f"{_format_mail_updated_at(diagnostics.mail_updated_at)}"
+    )
+
+
+def _draw_diagnostics(
+    draw: ImageDraw.ImageDraw,
+    diagnostics: DashboardDiagnostics,
+) -> None:
+    """Dessine la dernière ligne de la bande, réservée au diagnostic réel."""
 
     draw.line((24, 453, 776, 453), fill=(213, 190, 157), width=1)
+    diagnostic_text, diagnostic_font = _fit_single_line_text(
+        draw,
+        _format_diagnostics(diagnostics),
+        max_width=752,
+        min_size=8,
+        max_size=9,
+    )
     draw.text(
         (24, 458),
-        "Wi-Fi -63 dBm  •  MAJ 21:35  •  Serveur OK",
-        font=load_font(9),
+        diagnostic_text,
+        font=diagnostic_font,
         fill=MUTED_TEXT_COLOR,
     )
 
@@ -561,6 +600,7 @@ def render_dashboard(
     bme280_data: Mapping[str, Any] | None = None,
     weather_data: Mapping[str, Any] | None = None,
     activity: ActivityInfo | None = None,
+    diagnostics: DashboardDiagnostics | None = None,
 ) -> Image.Image:
     """Produit l'image complète du tableau de bord au format RGB 800 x 480."""
 
@@ -572,5 +612,13 @@ def render_dashboard(
     draw = ImageDraw.Draw(image)
     _draw_weather(draw, bme280_data, weather_data)
     _draw_mgm(draw, activity)
-    _draw_diagnostics(draw)
+    _draw_diagnostics(
+        draw,
+        diagnostics
+        or DashboardDiagnostics(
+            screen_rssi=None,
+            generated_at=datetime.now(),
+            mail_updated_at=None,
+        ),
+    )
     return image

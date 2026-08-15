@@ -18,10 +18,12 @@ import app as app_module
 from activity_service import ActivityInfo
 from dashboard_renderer import (
     ALERT_BANNER_BACKGROUND,
+    DashboardDiagnostics,
     _format_activity_datetime,
     _format_activity_lines,
     _format_activity_participants,
     _format_activity_player_count,
+    _format_diagnostics,
     render_dashboard,
 )
 from spectra6_converter import IMAGE_SIZE, convert_hybrid, is_protected_pixel
@@ -173,6 +175,84 @@ def test_render_source_image_passes_activity_to_renderer_without_refresh(
 
     assert image.size == IMAGE_SIZE
     assert received["activity"] is activity
+    assert received["diagnostics"].screen_rssi is None
+
+
+@pytest.mark.parametrize(
+    ("header_value", "expected"),
+    [
+        ("-63", -63),
+        (None, None),
+        ("invalide", None),
+        ("-121", None),
+        ("1", None),
+    ],
+)
+def test_parse_screen_rssi_is_defensive(
+    header_value: str | None,
+    expected: int | None,
+) -> None:
+    assert app_module._parse_screen_rssi(header_value) == expected
+
+
+def test_diagnostics_format_real_values_without_fictitious_status() -> None:
+    diagnostics = DashboardDiagnostics(
+        screen_rssi=-63,
+        generated_at=datetime(2026, 8, 15, 15, 13),
+        mail_updated_at=datetime(2026, 8, 15, 8, 0),
+    )
+
+    formatted = _format_diagnostics(diagnostics)
+
+    assert formatted == "Wi-Fi -63 dBm  •  MAJ 15:13  •  Courriel 15 août 08:00"
+    assert "Serveur OK" not in formatted
+
+
+def test_diagnostics_format_missing_values() -> None:
+    diagnostics = DashboardDiagnostics(
+        screen_rssi=None,
+        generated_at=datetime(2026, 8, 15, 15, 13),
+        mail_updated_at=None,
+    )
+
+    assert _format_diagnostics(diagnostics) == (
+        "Wi-Fi -- dBm  •  MAJ 15:13  •  Courriel indisponible"
+    )
+
+
+def test_render_source_image_handles_missing_or_corrupt_mail_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _corrupt_cache() -> None:
+        raise app_module.ReservationCacheError("cache invalide")
+
+    monkeypatch.setattr(app_module, "load_reservations_cache", _corrupt_cache)
+
+    image = app_module._render_source_image()
+
+    assert image.size == IMAGE_SIZE
+
+
+def test_dashboard_binary_passes_header_rssi_to_its_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[int | None] = []
+
+    class _Conversion:
+        palette_indices = bytes(384000)
+        preview = Image.new("RGB", IMAGE_SIZE)
+
+    def _fake_generation(*, screen_rssi: int | None = None) -> _Conversion:
+        captured.append(screen_rssi)
+        return _Conversion()
+
+    monkeypatch.setattr(app_module, "_generate_spectra6", _fake_generation)
+
+    with app.test_client() as client:
+        response = client.get("/dashboard.bin", headers={"X-EE04-RSSI": "-63"})
+
+    assert response.status_code == 200
+    assert captured == [-63]
 
 
 def test_activity_formatting_for_upcoming_activity() -> None:
