@@ -31,7 +31,7 @@ static const uint8_t kMaxPixelValue = 5;
 static const unsigned long kWifiTimeoutMs = 20000;
 static const unsigned long kHttpTimeoutMs = 15000;
 static const unsigned long kFirstDownloadDelayMs = 5000;
-static const unsigned long kDownloadIntervalMs = 5UL * 60UL * 1000UL;
+static const unsigned long kDownloadIntervalMs = 15UL * 60UL * 1000UL;
 static const unsigned long kStatusIntervalMs = 10UL * 1000UL;
 static const size_t kReadChunkSize = 1024;
 
