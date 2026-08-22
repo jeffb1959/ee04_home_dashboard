@@ -234,7 +234,10 @@ def test_only_confirmation_subjects_are_parsed() -> None:
     )
     client, _ = _make_client(fake)
 
-    result = client.get_upcoming_reservations_with_report(reference=datetime(2026, 8, 14))
+    result = client.get_upcoming_reservations_with_report(
+        reference=datetime(2026, 8, 14),
+        today=date(2026, 8, 14),
+    )
 
     assert result.confirmations_found == 1
     assert len(result.reservations) == 1
@@ -264,7 +267,10 @@ def test_confirmation_parse_error_is_ignored_without_stopping_others() -> None:
     )
     client, _ = _make_client(fake)
 
-    result = client.get_upcoming_reservations_with_report(reference=datetime(2026, 8, 14))
+    result = client.get_upcoming_reservations_with_report(
+        reference=datetime(2026, 8, 14),
+        today=date(2026, 8, 14),
+    )
 
     assert result.confirmations_found == 2
     assert result.confirmations_ignored == 1

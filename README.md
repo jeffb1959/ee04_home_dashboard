@@ -154,8 +154,35 @@ python app.py
 - `http://localhost:5050/dashboard.bin`
 - `http://localhost:5050/dashboard-spectra6.png`
 - `http://localhost:5050/health`
+- `http://localhost:5050/api/tube-vintage`
 
 Le port est `5050`.
+
+## API ESP32 `GET /api/tube-vintage`
+
+EE04 expose uniquement la période calculée par Home Assistant.
+
+La réponse valide contient exactement une clé :
+
+```json
+{ "period": "JOUR" }
+```
+
+Valeurs possibles :
+
+- `JOUR` : correspond au profil utilisateur de jour
+- `SOIR` : correspond au profil visuel de soirée
+- `NUIT` : les LED doivent être éteintes
+
+En cas de valeur inattendue ou d’indisponibilité, la route retourne :
+
+```json
+{ "error": "periode tube vintage indisponible" }
+```
+
+EE04 ne commande pas directement les LED. Il se contente de transmettre cette période.
+
+Les entêtes anti-cache (`Cache-Control`, `Pragma`, `Expires`) sont utilisées pour éviter toute réutilisation d’un ancien état par l’ESP32.
 
 ## Vérifications rapides
 

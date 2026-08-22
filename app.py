@@ -15,7 +15,7 @@ from PIL import Image
 from config import load_home_assistant_config, load_refresh_token
 from activity_service import get_display_activity
 from dashboard_renderer import DashboardDiagnostics, render_dashboard
-from home_assistant_client import HomeAssistantClient
+from home_assistant_client import HomeAssistantClient, HomeAssistantError
 from reservation_cache import ReservationCacheError, load_reservations_cache
 from spectra6_converter import BINARY_SIZE, ConversionResult, IMAGE_SIZE, convert_hybrid
 from reservation_refresh import ReservationRefreshResult, refresh_reservation_cache
@@ -26,6 +26,7 @@ OUTPUT_DIR = APP_DIR / "output"
 OUTPUT_PNG_FILE = OUTPUT_DIR / "dashboard.png"
 OUTPUT_BINARY_FILE = OUTPUT_DIR / "dashboard.bin"
 OUTPUT_SPECTRA6_FILE = OUTPUT_DIR / "dashboard_spectra6.png"
+TUBE_VINTAGE_PERIODS_ALLOWED = {"JOUR", "SOIR", "NUIT"}
 
 app = Flask(__name__)
 home_assistant_client = HomeAssistantClient(load_home_assistant_config())
@@ -148,6 +149,15 @@ def _extract_bearer_token(header_value: str | None) -> str | None:
     return token or None
 
 
+def _normalize_tube_vintage_period(value: str | None) -> str | None:
+    """Normalize la période tube vintage en ne retenant que JOUR, SOIR ou NUIT."""
+
+    candidate = (value or "").strip().upper()
+    if candidate not in TUBE_VINTAGE_PERIODS_ALLOWED:
+        return None
+    return candidate
+
+
 @app.get("/")
 def index() -> str:
     """Affiche une page d'accueil minimale avec un lien vers l'image."""
@@ -248,6 +258,32 @@ def health() -> Response:
         weather=home_assistant_client.weather_health_status(),
         environment_canada=home_assistant_client.environment_canada_health_status(),
     )
+
+
+@app.get("/api/tube-vintage")
+def api_tube_vintage() -> Response | tuple[Response, int]:
+    """Expose la période lumineuse calculée par Home Assistant."""
+
+    try:
+        entity = home_assistant_client.fetch_entity("sensor.periode_tube_vintage")
+    except HomeAssistantError:
+        app.logger.exception(
+            "Impossible de lire le capteur sensor.periode_tube_vintage"
+        )
+        response = jsonify(error="periode tube vintage indisponible")
+        return add_no_cache_headers(response), 503
+
+    period = _normalize_tube_vintage_period(entity.get("state", ""))
+    if period is None:
+        app.logger.warning(
+            "Valeur inattendue pour sensor.periode_tube_vintage: %r",
+            entity.get("state"),
+        )
+        response = jsonify(error="periode tube vintage indisponible")
+        return add_no_cache_headers(response), 503
+
+    response = jsonify(period=period)
+    return add_no_cache_headers(response)
 
 
 @app.post("/api/reservations/refresh")

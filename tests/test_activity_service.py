@@ -49,6 +49,10 @@ def _reservation(
     )
 
 
+def _datetime(*, day: int, hour: int, minute: int = 0) -> datetime:
+    return datetime(2026, 8, day, hour, minute)
+
+
 def test_today_activity_is_selected(tmp_path: Path) -> None:
     cache_path = tmp_path / "reservation_cache.json"
     _save_cache(
@@ -79,6 +83,170 @@ def test_today_activity_is_selected(tmp_path: Path) -> None:
     assert activity.heure == time(8, 57)
     assert activity.participants == ["Alice Tremblay", "Bob Martin", "Charles Gagnon"]
     assert activity.source_id == "TEST-18"
+
+
+def test_activity_before_departure_is_selected(tmp_path: Path) -> None:
+    cache_path = tmp_path / "reservation_cache.json"
+    _save_cache(
+        cache_path,
+        [
+            _reservation(
+                day=18,
+                heure=(8, 0),
+                players=["Alice"],
+                reservation_id="TODAY",
+            )
+        ],
+    )
+
+    activity = activity_service.get_display_activity(
+        now=_datetime(day=18, hour=7, minute=30),
+        cache_path=cache_path,
+    )
+
+    assert activity.status == "today"
+    assert activity.heure == time(8, 0)
+
+
+def test_activity_within_five_hour_window_is_kept(tmp_path: Path) -> None:
+    cache_path = tmp_path / "reservation_cache.json"
+    _save_cache(
+        cache_path,
+        [
+            _reservation(
+                day=18,
+                heure=(8, 0),
+                players=["Alice"],
+                reservation_id="TODAY",
+            )
+        ],
+    )
+
+    activity = activity_service.get_display_activity(
+        now=_datetime(day=18, hour=11, minute=0),
+        cache_path=cache_path,
+    )
+
+    assert activity.status == "today"
+    assert activity.heure == time(8, 0)
+
+
+def test_activity_expires_one_minute_before_limit_is_still_displayed(tmp_path: Path) -> None:
+    cache_path = tmp_path / "reservation_cache.json"
+    _save_cache(
+        cache_path,
+        [
+            _reservation(
+                day=18,
+                heure=(8, 0),
+                players=["Alice"],
+                reservation_id="TODAY",
+            )
+        ],
+    )
+
+    activity = activity_service.get_display_activity(
+        now=_datetime(day=18, hour=12, minute=59),
+        cache_path=cache_path,
+    )
+
+    assert activity.status == "today"
+    assert activity.heure == time(8, 0)
+
+
+def test_activity_expires_at_plus_five_hours_and_switches_to_next(tmp_path: Path) -> None:
+    cache_path = tmp_path / "reservation_cache.json"
+    _save_cache(
+        cache_path,
+        [
+            _reservation(
+                day=18,
+                heure=(8, 0),
+                players=["Alice"],
+                reservation_id="TODAY",
+            ),
+            _reservation(
+                day=19,
+                heure=(9, 15),
+                players=["Bob"],
+                reservation_id="TOMORROW",
+            ),
+        ],
+    )
+
+    activity = activity_service.get_display_activity(
+        now=_datetime(day=18, hour=13, minute=0),
+        cache_path=cache_path,
+    )
+
+    assert activity.status == "upcoming"
+    assert activity.date == date(2026, 8, 19)
+    assert activity.heure == time(9, 15)
+
+
+def test_activity_after_plus_five_hours_switches_to_upcoming(tmp_path: Path) -> None:
+    cache_path = tmp_path / "reservation_cache.json"
+    _save_cache(
+        cache_path,
+        [
+            _reservation(
+                day=18,
+                heure=(8, 0),
+                players=["Alice"],
+                reservation_id="TODAY",
+            ),
+            _reservation(
+                day=19,
+                heure=(9, 15),
+                players=["Bob"],
+                reservation_id="TOMORROW",
+            ),
+        ],
+    )
+
+    activity = activity_service.get_display_activity(
+        now=_datetime(day=18, hour=13, minute=1),
+        cache_path=cache_path,
+    )
+
+    assert activity.status == "upcoming"
+    assert activity.date == date(2026, 8, 19)
+    assert activity.heure == time(9, 15)
+
+
+def test_multiple_same_day_reservations_pick_next_when_first_expires(tmp_path: Path) -> None:
+    cache_path = tmp_path / "reservation_cache.json"
+    _save_cache(
+        cache_path,
+        [
+            _reservation(
+                day=18,
+                heure=(8, 0),
+                players=["Alice"],
+                reservation_id="EARLY",
+            ),
+            _reservation(
+                day=18,
+                heure=(14, 0),
+                players=["Bob"],
+                reservation_id="LATER",
+            ),
+        ],
+    )
+
+    activity_before = activity_service.get_display_activity(
+        now=_datetime(day=18, hour=10, minute=0),
+        cache_path=cache_path,
+    )
+    assert activity_before.status == "today"
+    assert activity_before.heure == time(8, 0)
+
+    activity_after = activity_service.get_display_activity(
+        now=_datetime(day=18, hour=13, minute=0),
+        cache_path=cache_path,
+    )
+    assert activity_after.status == "today"
+    assert activity_after.heure == time(14, 0)
 
 
 def test_today_activity_is_kept_even_when_hour_is_passed(tmp_path: Path) -> None:

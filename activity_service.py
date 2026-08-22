@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -67,13 +67,21 @@ def _unavailable() -> ActivityInfo:
 
 def get_display_activity(
     *,
+    now: datetime | None = None,
     today: date | None = None,
     cache_path: Path | str = DEFAULT_CACHE_PATH,
     cache_loader: Callable[..., object] = load_reservations_cache,
 ) -> ActivityInfo:
     """Retourne l'activité à afficher selon les règles métier actuelles."""
 
-    current_day = today or date.today()
+    if now is not None:
+        current_datetime = now
+    elif today is not None:
+        current_datetime = datetime.combine(today, time.min)
+    else:
+        current_datetime = datetime.now()
+
+    current_day = current_datetime.date()
     try:
         cache = cache_loader(cache_path=cache_path)
     except ReservationCacheError:
@@ -84,20 +92,16 @@ def get_display_activity(
 
     reservations = cache.reservations
 
-    today_reservations = [
-        reservation for reservation in reservations if reservation.date == current_day
-    ]
-    if today_reservations:
-        reservation = min(today_reservations, key=lambda value: value.heure)
-        return _from_reservation(status="today", reservation=reservation)
-
-    future_reservations = [
+    available_reservations = [
         reservation
         for reservation in reservations
-        if reservation.date > current_day
+        if current_datetime < datetime.combine(reservation.date, reservation.heure)
+        + timedelta(hours=5)
     ]
-    if future_reservations:
-        reservation = min(future_reservations, key=lambda value: (value.date, value.heure))
-        return _from_reservation(status="upcoming", reservation=reservation)
+    if not available_reservations:
+        return _empty_for_week()
 
-    return _empty_for_week()
+    reservation = min(available_reservations, key=lambda value: (value.date, value.heure))
+    if reservation.date == current_day:
+        return _from_reservation(status="today", reservation=reservation)
+    return _from_reservation(status="upcoming", reservation=reservation)
