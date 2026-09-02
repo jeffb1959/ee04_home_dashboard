@@ -129,6 +129,24 @@ def _make_client(
     return chronogolf_client.ChronogolfClient(config, imap_factory=factory), {"config": config}
 
 
+@pytest.mark.parametrize(
+    ("subject", "expected"),
+    (
+        ("Confirmation de réservation", True),
+        ("Tee Time Booking Confirmation", True),
+        ("TR : Confirmation de réservation", True),
+        ("TR : Tee Time Booking Confirmation", True),
+        ("FW: Tee Time Booking Confirmation", True),
+        ("Infolettre", False),
+        ("Quelque chose d’autre", False),
+    ),
+)
+def test_is_confirmation_subject(subject: str, expected: bool) -> None:
+    """Les objets français, anglais et transférés attendus sont reconnus."""
+
+    assert chronogolf_client.is_confirmation_subject(subject) is expected
+
+
 def test_load_imap_config_prefers_environment_variables(tmp_path: Path) -> None:
     """Les variables d’environnement doivent prendre la priorité sur `.env`."""
 
@@ -205,6 +223,32 @@ def test_fetch_uses_body_peek() -> None:
     client, _ = _make_client(fake)
     client.get_upcoming_reservations_with_report(reference=datetime(2026, 8, 14))
 
+    assert ("fetch", "1", "(BODY.PEEK[])") in fake.calls
+
+
+def test_english_confirmation_is_fetched_and_parse_error_is_ignored() -> None:
+    """Un objet anglais est compté et lu même si son corps n'est pas encore compris."""
+
+    fake = FakeImap(
+        search_data="1",
+        headers={
+            "1": _make_header_bytes(
+                "Tee Time Booking Confirmation",
+                "Tue, 11 Aug 2026 11:00:00 +0000",
+            ),
+        },
+        bodies={"1": b"English confirmation body not supported yet"},
+    )
+    client, _ = _make_client(fake)
+
+    result = client.get_upcoming_reservations_with_report(
+        reference=datetime(2026, 8, 14),
+        today=date(2026, 8, 14),
+    )
+
+    assert result.confirmations_found == 1
+    assert result.confirmations_ignored == 1
+    assert result.reservations == []
     assert ("fetch", "1", "(BODY.PEEK[])") in fake.calls
 
 

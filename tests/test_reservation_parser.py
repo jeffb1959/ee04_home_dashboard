@@ -52,10 +52,35 @@ def test_parse_french_date_with_weekday() -> None:
     assert reservation_parser.parse_french_date("mar. 18 août 2026") == date(2026, 8, 18)
 
 
+@pytest.mark.parametrize(
+    "value",
+    ("Fri, September 4, 2026", "September 4, 2026"),
+)
+def test_parse_english_date_with_or_without_weekday(value: str) -> None:
+    """Les dates anglaises sont analysées sans dépendre de la locale système."""
+
+    assert reservation_parser.parse_english_date(value) == date(2026, 9, 4)
+
+
 def test_parse_hour() -> None:
     """Le parseur comprend HH:MM."""
 
     assert reservation_parser.parse_hour("08:57") == time(8, 57)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    (
+        ("8:30 AM", time(8, 30)),
+        ("1:05 PM", time(13, 5)),
+        ("12:00 AM", time(0, 0)),
+        ("12:00 PM", time(12, 0)),
+    ),
+)
+def test_parse_english_hour(value: str, expected: time) -> None:
+    """Les heures anglaises AM/PM sont converties au format 24 heures."""
+
+    assert reservation_parser.parse_hour(value) == expected
 
 
 def test_parse_hour_rejects_non_full_line_text() -> None:
@@ -109,6 +134,15 @@ def test_parse_three_players_with_commas_and_et() -> None:
     assert players == ["Alice Martin", "Bob Durand", "Charles Léon"]
 
 
+def test_parse_three_players_with_name_and_and() -> None:
+    """Le séparateur anglais `and` et les points parasites sont acceptés."""
+
+    players = reservation_parser.parse_players(
+        "Alice. Martin, Bob. Martin, and Charles Martin"
+    )
+    assert players == ["Alice Martin", "Bob Martin", "Charles Martin"]
+
+
 def test_clean_player_name_with_spurious_dot() -> None:
     """Le point parasite entre prénom et nom est supprimé proprement."""
 
@@ -122,6 +156,80 @@ def test_parse_reservation_id_line() -> None:
         "ID de réservation : ABCD-1234"
     )
     assert reservation_id == "ABCD-1234"
+
+
+def test_parse_booking_id_line() -> None:
+    """L’identifiant anglais `Booking ID` est extrait."""
+
+    assert reservation_parser.parse_reservation_id_line(
+        "Booking ID: TEST-5678"
+    ) == "TEST-5678"
+
+
+def test_parse_complete_current_english_confirmation() -> None:
+    """Le format anglais actuel produit une réservation complète."""
+
+    reservation = reservation_parser.parse_confirmation_reservation(
+        """\
+Reservation confirmed
+Example Golf Club
+Reservation confirmed
+Fri, September 4, 2026
+8:30 AM
+3 players • Round of golf (18 holes)
+Example Course
+Name: Alice. Martin, Bob. Martin, and Charles Martin
+Booking ID: TEST-1234
+"""
+    )
+
+    assert reservation.date == date(2026, 9, 4)
+    assert reservation.heure == time(8, 30)
+    assert reservation.joueurs == ["Alice Martin", "Bob Martin", "Charles Martin"]
+    assert reservation.reservation_id == "TEST-1234"
+
+
+def test_english_confirmation_ignores_forwarded_header_date() -> None:
+    """Une date antérieure au bloc structuré n'est pas choisie comme départ."""
+
+    reservation = reservation_parser.parse_confirmation_reservation(
+        """\
+Sent: January 2, 2026
+January 2, 2026
+Reservation confirmed
+September 4, 2026
+1:05 PM
+2 players • Round of golf (18 holes)
+Example Course
+Name: Alice Martin and Bob Martin
+Booking ID: TEST-5678
+"""
+    )
+
+    assert reservation.date == date(2026, 9, 4)
+    assert reservation.heure == time(13, 5)
+
+
+def test_parse_complete_historical_english_confirmation() -> None:
+    """Le format anglais historique choisit la date de son bloc structuré."""
+
+    reservation = reservation_parser.parse_confirmation_reservation(
+        """\
+October 1, 2025
+Tee Time Reservation Confirmation
+Reservation 0H8D-6F4Z
+11:45 AM
+October 18, 2025
+Example Course
+Round of golf (18 holes)
+● ● ● Alice. Martin, Bob. Martin, and Guest
+"""
+    )
+
+    assert reservation.date == date(2025, 10, 18)
+    assert reservation.heure == time(11, 45)
+    assert reservation.joueurs == ["Alice Martin", "Bob Martin", "Guest"]
+    assert reservation.reservation_id == "0H8D-6F4Z"
 
 
 def test_parse_complete_confirmation() -> None:

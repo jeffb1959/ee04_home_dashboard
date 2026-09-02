@@ -21,7 +21,10 @@ import reservation_parser
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 ENV_FILE = PROJECT_ROOT / ".env"
-CONFIRMATION_SUBJECT = "confirmation de réservation"
+CONFIRMATION_SUBJECTS = (
+    "confirmation de réservation",
+    "tee time booking confirmation",
+)
 SEARCH_WINDOW_DAYS = 7
 IMAP_MONTHS_EN = (
     "Jan",
@@ -105,8 +108,11 @@ def is_confirmation_subject(raw_subject: str | None) -> bool:
     """Retourne vrai si le sujet correspond à une confirmation de réservation."""
 
     normalized = _normalize_subject(decode_mime_subject(raw_subject))
-    target = _normalize_subject(CONFIRMATION_SUBJECT)
-    return normalized == target or f" {target} " in f" {normalized} "
+    return any(
+        normalized == target or f" {target} " in f" {normalized} "
+        for subject in CONFIRMATION_SUBJECTS
+        if (target := _normalize_subject(subject))
+    )
 
 
 def load_imap_config(

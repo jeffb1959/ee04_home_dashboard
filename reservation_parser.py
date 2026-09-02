@@ -46,6 +46,26 @@ FR_MONTHS = {
     "décembre": 12,
 }
 
+EN_MONTHS = {
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
+}
+
+ENGLISH_WEEKDAYS = {
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", "sat", "sun",
+}
+
 FRENCH_WEEKDAYS = {
     "lun",
     "mar",
@@ -58,12 +78,21 @@ FRENCH_WEEKDAYS = {
 
 TIME_RE = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\b")
 STRICT_TIME_RE = re.compile(r"^(?P<hour>[01]?\d|2[0-3]):(?P<minute>[0-5]\d)$")
+ENGLISH_TIME_RE = re.compile(
+    r"^(?P<hour>1[0-2]|[1-9]):(?P<minute>[0-5]\d)\s*(?P<period>AM|PM)$",
+    re.IGNORECASE,
+)
 PLAYERS_ACTIVITY_RE = re.compile(
-    r"^(?P<count>\d+)\s*joueurs?\s*[\u2022\u00b7•]\s*(?P<activity>.+)$",
+    r"^(?P<count>\d+)\s*(?:joueurs?|players?)\s*[\u2022\u00b7•]\s*(?P<activity>.+)$",
     re.IGNORECASE,
 )
 FRENCH_DATE_RE = re.compile(
     r"^(?:(?P<weekday>[a-zéûêàèâôïçù]+)\.?\s+)?(?P<day>\d{1,2})\s+(?P<month>[a-zàâçéèêëîïôûùüÿœ]+)\s+(?P<year>\d{4})$",
+    re.IGNORECASE,
+)
+ENGLISH_DATE_RE = re.compile(
+    r"^(?:(?P<weekday>[A-Za-z]+),?\s+)?(?P<month>[A-Za-z]+)\s+"
+    r"(?P<day>\d{1,2}),\s*(?P<year>\d{4})$",
     re.IGNORECASE,
 )
 
@@ -117,14 +146,42 @@ def parse_french_date(value: str) -> date:
     return _parse_day_month_year(value, match=match)
 
 
+def parse_english_date(value: str) -> date:
+    """Analyse une date anglaise sans dépendre de la locale système."""
+
+    normalized = _normalize_whitespace(_normalize_text_for_parsing(value))
+    match = ENGLISH_DATE_RE.match(normalized)
+    if not match:
+        raise ReservationParseError("Date de réservation manquante ou invalide.")
+
+    weekday = (match.group("weekday") or "").casefold()
+    if weekday and weekday not in ENGLISH_WEEKDAYS:
+        raise ReservationParseError("Jour de la semaine inattendu.")
+    month = EN_MONTHS.get(match.group("month").casefold())
+    if month is None:
+        raise ReservationParseError("Mois de réservation inconnu.")
+    return date(
+        year=int(match.group("year")),
+        month=month,
+        day=int(match.group("day")),
+    )
+
+
 def parse_hour(value: str) -> time:
-    """Analyse une heure courte HH:MM."""
+    """Analyse une heure courte HH:MM ou une heure anglaise sur 12 heures."""
 
     normalized = _normalize_whitespace(_normalize_text_for_parsing(value))
     match = STRICT_TIME_RE.match(normalized)
-    if not match:
-        raise ReservationParseError("Heure de réservation manquante ou invalide.")
-    return time(int(match.group("hour")), int(match.group("minute")))
+    if match:
+        return time(int(match.group("hour")), int(match.group("minute")))
+
+    english_match = ENGLISH_TIME_RE.match(normalized)
+    if english_match:
+        hour = int(english_match.group("hour")) % 12
+        if english_match.group("period").casefold() == "pm":
+            hour += 12
+        return time(hour, int(english_match.group("minute")))
+    raise ReservationParseError("Heure de réservation manquante ou invalide.")
 
 
 def _is_separator_line(value: str) -> bool:
@@ -161,10 +218,11 @@ def parse_player_name(raw_name: str) -> str:
 
 
 def parse_players(raw_players: str) -> list[str]:
-    """Analyse la ligne `Nom : A, B et C`."""
+    """Analyse une liste de joueurs séparés par virgule, `et` ou `and`."""
 
     normalized = _normalize_text_for_parsing(raw_players)
     normalized = re.sub(r"\set\s+", ", ", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r"\sand\s+", ", ", normalized, flags=re.IGNORECASE)
     pieces = [_normalize_whitespace(piece) for piece in normalized.split(",")]
     players = [parse_player_name(piece) for piece in pieces if piece.strip()]
     if not players:
@@ -177,7 +235,7 @@ def parse_reservation_id_line(line: str) -> str | None:
 
     normalized = _normalize_whitespace(_normalize_text_for_parsing(line))
     match = re.match(
-        r"ID\s+de\s+r[ée]servation\s*:\s*(.+)",
+        r"(?:ID\s+de\s+r[ée]servation|Booking\s+ID)\s*:\s*(.+)",
         normalized,
         re.IGNORECASE,
     )
@@ -185,6 +243,44 @@ def parse_reservation_id_line(line: str) -> str | None:
         return None
     reservation_id = _normalize_whitespace(match.group(1))
     return reservation_id or None
+
+
+def _find_current_english_block(lines: Sequence[str]) -> tuple[int, date, time] | None:
+    """Trouve le bloc anglais actuel grâce à ses quatre lignes structurantes."""
+
+    for index in range(len(lines) - 3):
+        if lines[index].casefold() != "reservation confirmed":
+            continue
+        try:
+            reservation_date = parse_english_date(lines[index + 1])
+            reservation_hour = parse_hour(lines[index + 2])
+            parse_players_and_activity(lines[index + 3])
+        except ReservationParseError:
+            continue
+        return index, reservation_date, reservation_hour
+    return None
+
+
+def _find_historical_english_block(
+    lines: Sequence[str],
+) -> tuple[int, date, time, str] | None:
+    """Trouve l'ancien bloc `Reservation ID / heure / date`."""
+
+    id_pattern = re.compile(
+        r"^Reservation\s+(?P<id>[A-Z0-9]+(?:-[A-Z0-9]+)+)$",
+        re.IGNORECASE,
+    )
+    for index in range(len(lines) - 2):
+        match = id_pattern.match(lines[index])
+        if not match:
+            continue
+        try:
+            reservation_hour = parse_hour(lines[index + 1])
+            reservation_date = parse_english_date(lines[index + 2])
+        except ReservationParseError:
+            continue
+        return index, reservation_date, reservation_hour, match.group("id")
+    return None
 
 
 def parse_confirmation_reservation(
@@ -200,15 +296,27 @@ def parse_confirmation_reservation(
 
     reservation_date: date | None = None
     reservation_date_index = -1
-    for index, line in enumerate(lines):
-        if FRENCH_DATE_RE.match(_ascii_lower(line)):
-            reservation_date = parse_french_date(line)
-            reservation_date_index = index
-            break
-
     reservation_hour: time | None = None
     players: list[str] | None = None
     reservation_id: str | None = None
+
+    current_english = _find_current_english_block(lines)
+    historical_english = _find_historical_english_block(lines)
+    if current_english is not None:
+        reservation_date_index, reservation_date, reservation_hour = current_english
+    elif historical_english is not None:
+        (
+            reservation_date_index,
+            reservation_date,
+            reservation_hour,
+            reservation_id,
+        ) = historical_english
+    else:
+        for index, line in enumerate(lines):
+            if FRENCH_DATE_RE.match(_ascii_lower(line)):
+                reservation_date = parse_french_date(line)
+                reservation_date_index = index
+                break
 
     for index, line in enumerate(
         lines[reservation_date_index + 1 :],
@@ -225,11 +333,16 @@ def parse_confirmation_reservation(
             except ReservationParseError:
                 pass
 
-        if lower.startswith("nom"):
-            match = re.match(r"nom\s*:\s*(.+)", line, re.IGNORECASE)
+        if lower.startswith(("nom", "name")):
+            match = re.match(r"(?:nom|name)\s*:\s*(.+)", line, re.IGNORECASE)
             if match:
                 players = parse_players(match.group(1))
                 continue
+
+        if historical_english is not None and re.match(r"^[●•]", line):
+            raw_players = re.sub(r"^[●•\s]+", "", line)
+            players = parse_players(raw_players)
+            continue
 
         reservation_id_value = parse_reservation_id_line(line)
         if reservation_id_value is not None:
